@@ -1,25 +1,28 @@
 use std::env;
-use std::f32::consts::PI;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use geometry::Segment;
 use image::imageops::resize;
 use image::imageops::FilterType::Lanczos3;
 use image::{DynamicImage, GrayImage, Rgb};
-use imageproc::contours::{find_contours_with_threshold, BorderType, Contour};
+use imageproc::contours::Contour;
 use imageproc::drawing::{draw_cross_mut, draw_filled_rect_mut, draw_line_segment_mut};
-use imageproc::{contrast::otsu_level, rect::Rect};
+use imageproc::rect::Rect;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use types::{BallotCardGeometry, BallotPaperSize, Size};
 
-use crate::timing_marks::rect_could_be_timing_mark;
+use crate::geometry::{segment_distance, segment_with_length};
+use crate::timing_marks::{
+    find_partial_timing_marks_from_candidate_rects, find_timing_mark_shapes,
+};
 
 mod geometry;
 mod timing_marks;
 mod types;
 
 fn get_scanned_ballot_card_geometry_8pt5x11() -> BallotCardGeometry {
-    return BallotCardGeometry {
+    BallotCardGeometry {
         ballot_paper_size: BallotPaperSize::Letter,
         pixels_per_inch: 200,
         canvas_size: Size {
@@ -41,11 +44,11 @@ fn get_scanned_ballot_card_geometry_8pt5x11() -> BallotCardGeometry {
         },
         front_usable_area: Rect::at(0, 0).of_size(34, 41),
         back_usable_area: Rect::at(0, 0).of_size(34, 41),
-    };
+    }
 }
 
 fn get_scanned_ballot_card_geometry_8pt5x14() -> BallotCardGeometry {
-    return BallotCardGeometry {
+    BallotCardGeometry {
         ballot_paper_size: BallotPaperSize::Legal,
         pixels_per_inch: 200,
         canvas_size: Size {
@@ -67,7 +70,7 @@ fn get_scanned_ballot_card_geometry_8pt5x14() -> BallotCardGeometry {
         },
         front_usable_area: Rect::at(0, 0).of_size(34, 53),
         back_usable_area: Rect::at(0, 0).of_size(34, 53),
-    };
+    }
 }
 
 fn get_scanned_ballot_card_geometry(size: (u32, u32)) -> Option<BallotCardGeometry> {
@@ -116,7 +119,7 @@ fn is_contour_rectangular(contour: &Contour<u32>) -> bool {
         })
         .sum::<u32>();
     let rectangular_score = error_value as f32 / contour.points.len() as f32;
-    return rectangular_score < 1.0;
+    rectangular_score < 1.0
 }
 
 fn size_image_to_fit(img: &GrayImage, max_width: u32, max_height: u32) -> GrayImage {
@@ -131,7 +134,7 @@ fn size_image_to_fit(img: &GrayImage, max_width: u32, max_height: u32) -> GrayIm
     } else {
         max_height
     };
-    return resize(img, new_width, new_height, Lanczos3);
+    resize(img, new_width, new_height, Lanczos3)
 }
 
 const RAINBOW: [Rgb<u8>; 7] = [
@@ -162,7 +165,12 @@ fn find_best_line_through_items(rects: &Vec<Rect>, angle: f32, tolerance: f32) -
 
                 let rects_intsersecting_line = rects
                     .iter()
-                    .filter(|r| geometry::rect_intersects_line(r, &(rect_center, other_rect_center)))
+                    .filter(|r| {
+                        geometry::rect_intersects_line(
+                            r,
+                            &Segment::new(rect_center, other_rect_center),
+                        )
+                    })
                     .collect::<Vec<&Rect>>();
 
                 if rects_intsersecting_line.len() > best_rects.len() {
@@ -170,7 +178,7 @@ fn find_best_line_through_items(rects: &Vec<Rect>, angle: f32, tolerance: f32) -
                 }
             }
 
-            return best_rects;
+            best_rects
         })
         .reduce_with(|best_rects, other_best_rects| {
             if other_best_rects.len() > best_rects.len() {
@@ -182,6 +190,16 @@ fn find_best_line_through_items(rects: &Vec<Rect>, angle: f32, tolerance: f32) -
         .unwrap();
 
     return best_rects.iter().map(|r| **r).collect();
+}
+
+fn debug_image_path(base: &Path, label: &str) -> PathBuf {
+    let mut result = PathBuf::from(base);
+    result.set_file_name(format!(
+        "{}_debug_{}.png",
+        base.file_stem().unwrap().to_str().unwrap(),
+        label
+    ));
+    result
 }
 
 fn process_image(image_path: &Path) {
@@ -210,67 +228,8 @@ fn process_image(image_path: &Path) {
         geometry.canvas_size.height,
     );
 
-    // let rects = vertical_scan_for_timing_marks(&img, &geometry);
-    // let mut vertical_scan_debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
-
-    // for (i, rect) in rects.iter().enumerate() {
-    //     if rect_could_be_timing_mark(&geometry, rect) {
-    //         draw_filled_rect_mut(
-    //             &mut vertical_scan_debug_image,
-    //             *rect,
-    //             RAINBOW[i % RAINBOW.len()],
-    //         );
-    //     }
-    // }
-
-    // vertical_scan_debug_image
-    //     .save("vertical_scan_debug_image.png")
-    //     .unwrap();
-
-    let threshold = otsu_level(&img);
-    let mut contour_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
-    let start = Instant::now();
-    let contours = find_contours_with_threshold(&img, threshold);
-    for (i, contour) in contours.iter().enumerate() {
-        if contour.border_type == BorderType::Hole {
-            let contour_bounds = get_contour_bounding_rect(&contour);
-            if timing_marks::rect_could_be_timing_mark(&geometry, &contour_bounds)
-                && is_contour_rectangular(&contour)
-                && contours.iter().all(|c| c.parent != Some(i))
-            {
-                contour.points.iter().for_each(|point| {
-                    contour_image.put_pixel(point.x, point.y, Rgb([255u8, 0u8, 0u8]));
-                });
-            }
-        }
-    }
-    println!("contour time: {:?}", start.elapsed());
-    contour_image
-        .save(format!(
-            "{}_contours.png",
-            image_path.file_stem().unwrap().to_str().unwrap()
-        ))
-        .unwrap();
-
-    let start = Instant::now();
-    let contour_rects = contours
-        .iter()
-        .enumerate()
-        .flat_map(|(i, contour)| {
-            if contour.border_type == BorderType::Hole {
-                let contour_bounds = get_contour_bounding_rect(&contour);
-                if rect_could_be_timing_mark(&geometry, &contour_bounds)
-                    && is_contour_rectangular(&contour)
-                    && contours.iter().all(|c| c.parent != Some(i))
-                {
-                    return Some(contour_bounds);
-                }
-            }
-            None
-        })
-        .collect::<Vec<Rect>>();
-
     let mut contour_rects_debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
+    let contour_rects = find_timing_mark_shapes(&geometry, &img);
 
     for (i, rect) in contour_rects.iter().enumerate() {
         draw_filled_rect_mut(
@@ -280,105 +239,86 @@ fn process_image(image_path: &Path) {
         );
     }
 
+    let contour_rects_debug_image_path = debug_image_path(image_path, "contour_rects");
     contour_rects_debug_image
-        .save(format!(
-            "{}_contour_rects.png",
-            image_path.file_stem().unwrap().to_str().unwrap()
-        ))
+        .save(&contour_rects_debug_image_path)
         .unwrap();
+    println!(
+        "wrote contour rects debug image: {:?}",
+        contour_rects_debug_image_path
+    );
 
-    let mut find_best_fit_line_debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
-    let half_height = (geometry.canvas_size.height / 2) as i32;
-    let top_half_rects = contour_rects
-        .iter()
-        .filter(|r| r.top() < half_height)
-        .map(|r| *r)
-        .collect::<Vec<Rect>>();
-    let bottom_half_rects = contour_rects
-        .iter()
-        .filter(|r| r.top() >= half_height)
-        .map(|r| *r)
-        .collect::<Vec<Rect>>();
-    let left_half_rects = contour_rects
-        .iter()
-        .filter(|r| r.left() < half_height)
-        .map(|r| *r)
-        .collect::<Vec<Rect>>();
-    let right_half_rects = contour_rects
-        .iter()
-        .filter(|r| r.left() >= half_height)
-        .map(|r| *r)
-        .collect::<Vec<Rect>>();
-    let mut top_line = find_best_line_through_items(&top_half_rects, 0.0, 5.0_f32.to_radians());
-    let mut bottom_line =
-        find_best_line_through_items(&bottom_half_rects, 0.0, 5.0_f32.to_radians());
-    let mut left_line =
-        find_best_line_through_items(&left_half_rects, PI / 2.0, 5.0_f32.to_radians());
-    let mut right_line =
-        find_best_line_through_items(&right_half_rects, PI / 2.0, 5.0_f32.to_radians());
+    let partial_timing_marks =
+        find_partial_timing_marks_from_candidate_rects(&geometry, &contour_rects);
 
-    top_line.sort_by(|a, b| a.left().partial_cmp(&b.left()).unwrap());
-    bottom_line.sort_by(|a, b| a.left().partial_cmp(&b.left()).unwrap());
-    left_line.sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap());
-    right_line.sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap());
+    if partial_timing_marks.is_none() {
+        return;
+    }
+    let partial_timing_marks = partial_timing_marks.unwrap();
 
-    let mut all_distances = vec![];
-    all_distances.append(&mut geometry::distances_between_rects(&top_line));
-    all_distances.append(&mut geometry::distances_between_rects(&bottom_line));
-    all_distances.append(&mut geometry::distances_between_rects(&left_line));
-    all_distances.append(&mut geometry::distances_between_rects(&right_line));
-    all_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median_distance = all_distances[all_distances.len() / 2];
-
-    println!("median distance: {}", median_distance);
-    println!("find best fit line time: {:?}", start.elapsed());
-
-    let top_start_rect_center = geometry::center_of_rect(top_line.first().unwrap());
-    let top_last_rect_center = geometry::center_of_rect(top_line.last().unwrap());
+    let mut find_best_fit_line_debug_image = DynamicImage::ImageLuma8(img).into_rgb8();
     draw_line_segment_mut(
         &mut find_best_fit_line_debug_image,
-        (top_start_rect_center.x, top_start_rect_center.y),
-        (top_last_rect_center.x, top_last_rect_center.y),
+        (
+            partial_timing_marks.top_left_corner.x,
+            partial_timing_marks.top_left_corner.y,
+        ),
+        (
+            partial_timing_marks.top_right_corner.x,
+            partial_timing_marks.top_right_corner.y,
+        ),
         Rgb([0, 255, 0]),
     );
 
-    let bottom_start_rect_center = geometry::center_of_rect(bottom_line.first().unwrap());
-    let bottom_last_rect_center = geometry::center_of_rect(bottom_line.last().unwrap());
     draw_line_segment_mut(
         &mut find_best_fit_line_debug_image,
-        (bottom_start_rect_center.x, bottom_start_rect_center.y),
-        (bottom_last_rect_center.x, bottom_last_rect_center.y),
+        (
+            partial_timing_marks.bottom_left_corner.x,
+            partial_timing_marks.bottom_left_corner.y,
+        ),
+        (
+            partial_timing_marks.bottom_right_corner.x,
+            partial_timing_marks.bottom_right_corner.y,
+        ),
         Rgb([0, 0, 255]),
     );
 
-    let left_start_rect_center = geometry::center_of_rect(left_line.first().unwrap());
-    let left_last_rect_center = geometry::center_of_rect(left_line.last().unwrap());
     draw_line_segment_mut(
         &mut find_best_fit_line_debug_image,
-        (left_start_rect_center.x, left_start_rect_center.y),
-        (left_last_rect_center.x, left_last_rect_center.y),
+        (
+            partial_timing_marks.top_left_corner.x,
+            partial_timing_marks.top_left_corner.y,
+        ),
+        (
+            partial_timing_marks.bottom_left_corner.x,
+            partial_timing_marks.bottom_left_corner.y,
+        ),
         Rgb([255, 0, 0]),
     );
 
-    let right_start_rect_center = geometry::center_of_rect(right_line.first().unwrap());
-    let right_last_rect_center = geometry::center_of_rect(right_line.last().unwrap());
     draw_line_segment_mut(
         &mut find_best_fit_line_debug_image,
-        (right_start_rect_center.x, right_start_rect_center.y),
-        (right_last_rect_center.x, right_last_rect_center.y),
+        (
+            partial_timing_marks.top_right_corner.x,
+            partial_timing_marks.top_right_corner.y,
+        ),
+        (
+            partial_timing_marks.bottom_right_corner.x,
+            partial_timing_marks.bottom_right_corner.y,
+        ),
         Rgb([0, 255, 255]),
     );
 
-    for rect in &top_line {
+    for rect in &partial_timing_marks.top_rects {
         draw_filled_rect_mut(&mut find_best_fit_line_debug_image, *rect, Rgb([0, 255, 0]));
     }
-    for rect in &bottom_line {
+    for rect in &partial_timing_marks.bottom_rects {
         draw_filled_rect_mut(&mut find_best_fit_line_debug_image, *rect, Rgb([0, 0, 255]));
     }
-    for rect in &left_line {
+    for rect in &partial_timing_marks.left_rects {
         draw_filled_rect_mut(&mut find_best_fit_line_debug_image, *rect, Rgb([255, 0, 0]));
     }
-    for rect in &right_line {
+    for rect in &partial_timing_marks.right_rects {
         draw_filled_rect_mut(
             &mut find_best_fit_line_debug_image,
             *rect,
@@ -386,117 +326,154 @@ fn process_image(image_path: &Path) {
         );
     }
 
-    let top_left_corner = if top_line.first() == left_line.first() {
-        top_line.first()
-    } else {
-        None
-    };
-    let top_right_corner = if top_line.last() == right_line.first() {
-        top_line.last()
-    } else {
-        None
-    };
-    let bottom_left_corner = if bottom_line.first() == left_line.last() {
-        bottom_line.first()
-    } else {
-        None
-    };
-    let bottom_right_corner = if bottom_line.last() == right_line.last() {
-        bottom_line.last()
-    } else {
-        None
-    };
-
-    if let Some(top_left_corner) = top_left_corner {
+    if let Some(top_left_corner) = partial_timing_marks.top_left_rect {
         draw_filled_rect_mut(
             &mut find_best_fit_line_debug_image,
-            *top_left_corner,
+            top_left_corner,
             Rgb([255, 0, 255]),
         );
     }
 
-    if let Some(top_right_corner) = top_right_corner {
+    if let Some(top_right_corner) = partial_timing_marks.top_right_rect {
         draw_filled_rect_mut(
             &mut find_best_fit_line_debug_image,
-            *top_right_corner,
+            top_right_corner,
             Rgb([255, 0, 255]),
         );
     }
 
-    if let Some(bottom_left_corner) = bottom_left_corner {
+    if let Some(bottom_left_corner) = partial_timing_marks.bottom_left_rect {
         draw_filled_rect_mut(
             &mut find_best_fit_line_debug_image,
-            *bottom_left_corner,
+            bottom_left_corner,
             Rgb([255, 0, 255]),
         );
     }
 
-    if let Some(bottom_right_corner) = bottom_right_corner {
+    if let Some(bottom_right_corner) = partial_timing_marks.bottom_right_rect {
         draw_filled_rect_mut(
             &mut find_best_fit_line_debug_image,
-            *bottom_right_corner,
+            bottom_right_corner,
             Rgb([255, 0, 255]),
         );
     }
 
-    let top_left_intersection = geometry::intersection_of_lines(
-        &(top_start_rect_center, top_last_rect_center),
-        &(left_start_rect_center, left_last_rect_center),
-        false,
-    )
-    .unwrap();
     draw_cross_mut(
         &mut find_best_fit_line_debug_image,
         Rgb([255, 255, 255]),
-        top_left_intersection.x.round() as i32,
-        top_left_intersection.y.round() as i32,
+        partial_timing_marks.top_left_corner.x.round() as i32,
+        partial_timing_marks.top_left_corner.y.round() as i32,
     );
 
-    let top_right_intersection = geometry::intersection_of_lines(
-        &(top_start_rect_center, top_last_rect_center),
-        &(right_start_rect_center, right_last_rect_center),
-        false,
-    )
-    .unwrap();
     draw_cross_mut(
         &mut find_best_fit_line_debug_image,
         Rgb([255, 255, 255]),
-        top_right_intersection.x.round() as i32,
-        top_right_intersection.y.round() as i32,
+        partial_timing_marks.top_right_corner.x.round() as i32,
+        partial_timing_marks.top_right_corner.y.round() as i32,
     );
 
-    if let Some(bottom_left_intersection) = geometry::intersection_of_lines(
-        &(bottom_start_rect_center, bottom_last_rect_center),
-        &(left_start_rect_center, left_last_rect_center),
-        false,
-    ) {
+    draw_cross_mut(
+        &mut find_best_fit_line_debug_image,
+        Rgb([255, 255, 255]),
+        partial_timing_marks.bottom_left_corner.x.round() as i32,
+        partial_timing_marks.bottom_left_corner.y.round() as i32,
+    );
+
+    draw_cross_mut(
+        &mut find_best_fit_line_debug_image,
+        Rgb([255, 255, 255]),
+        partial_timing_marks.bottom_right_corner.x.round() as i32,
+        partial_timing_marks.bottom_right_corner.y.round() as i32,
+    );
+
+    let top_line_distance = segment_distance(
+        &Segment::new(
+            partial_timing_marks.top_left_corner,
+            partial_timing_marks.top_right_corner,
+        )
+    );
+    let _top_line_distance_per_segment =
+        top_line_distance / ((geometry.grid_size.width - 1) as f32);
+    let bottom_line_distance = segment_distance(&Segment::new(
+        partial_timing_marks.bottom_left_corner,
+        partial_timing_marks.bottom_right_corner,
+    ));
+    let _bottom_line_distance_per_segment =
+        bottom_line_distance / ((geometry.grid_size.width - 1) as f32);
+    for i in 0..geometry.grid_size.width {
+        let expected_top_timing_mark_center = segment_with_length(
+            &Segment::new(partial_timing_marks.top_left_corner, partial_timing_marks.top_right_corner),
+            top_line_distance * (i as f32),
+        )
+        .end;
+
         draw_cross_mut(
             &mut find_best_fit_line_debug_image,
-            Rgb([255, 255, 255]),
-            bottom_left_intersection.x.round() as i32,
-            bottom_left_intersection.y.round() as i32,
+            Rgb([0, 127, 0]),
+            expected_top_timing_mark_center.x.round() as i32,
+            expected_top_timing_mark_center.y.round() as i32,
+        );
+
+        let expected_bottom_timing_mark_center = segment_with_length(
+            &Segment::new(partial_timing_marks.bottom_left_corner, partial_timing_marks.bottom_right_corner),
+            bottom_line_distance * (i as f32),
+        )
+        .end;
+
+        draw_cross_mut(
+            &mut find_best_fit_line_debug_image,
+            Rgb([0, 0, 127]),
+            expected_bottom_timing_mark_center.x.round() as i32,
+            expected_bottom_timing_mark_center.y.round() as i32,
         );
     }
 
-    if let Some(bottom_right_intersection) = geometry::intersection_of_lines(
-        &(bottom_start_rect_center, bottom_last_rect_center),
-        &(right_start_rect_center, right_last_rect_center),
-        false,
-    ) {
+    let left_line_distance = segment_distance(&Segment::new(
+        partial_timing_marks.top_left_corner, partial_timing_marks.bottom_left_corner,
+    ));
+    let left_line_distance_per_segment =
+        left_line_distance / ((geometry.grid_size.height - 1) as f32);
+    let right_line_distance = segment_distance(&Segment::new(
+        partial_timing_marks.top_right_corner, partial_timing_marks.bottom_right_corner,
+    ));
+    let right_line_distance_per_segment =
+        right_line_distance / ((geometry.grid_size.height - 1) as f32);
+    for i in 0..geometry.grid_size.height {
+        let expected_left_timing_mark_center = segment_with_length(
+            &Segment::new(partial_timing_marks.top_left_corner, partial_timing_marks.bottom_left_corner),
+            left_line_distance_per_segment * (i as f32),
+        )
+        .end;
+
         draw_cross_mut(
             &mut find_best_fit_line_debug_image,
-            Rgb([255, 255, 255]),
-            bottom_right_intersection.x.round() as i32,
-            bottom_right_intersection.y.round() as i32,
+            Rgb([127, 0, 0]),
+            expected_left_timing_mark_center.x.round() as i32,
+            expected_left_timing_mark_center.y.round() as i32,
+        );
+
+        let expected_right_timing_mark_center = segment_with_length(
+            &Segment::new(partial_timing_marks.top_right_corner, partial_timing_marks.bottom_right_corner),
+            right_line_distance_per_segment * (i as f32),
+        )
+        .end;
+
+        draw_cross_mut(
+            &mut find_best_fit_line_debug_image,
+            Rgb([0, 127, 127]),
+            expected_right_timing_mark_center.x.round() as i32,
+            expected_right_timing_mark_center.y.round() as i32,
         );
     }
 
+    let find_best_fit_line_debug_image_path = debug_image_path(image_path, "find_best_fit_line");
     find_best_fit_line_debug_image
-        .save(image_path.with_file_name(format!(
-            "{}_debug_find_best_fit_line.png",
-            image_path.file_stem().unwrap().to_str().unwrap()
-        )))
+        .save(&find_best_fit_line_debug_image_path)
         .unwrap();
+    println!(
+        "wrote find_best_fit_line debug image: {:?}",
+        find_best_fit_line_debug_image_path
+    );
 }
 
 fn main() {
