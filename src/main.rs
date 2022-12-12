@@ -1,15 +1,20 @@
+extern crate log;
+extern crate pretty_env_logger;
+
 use std::env;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
+use clap::{arg, command, Command};
 use geometry::Segment;
 use image::imageops::resize;
 use image::imageops::FilterType::Lanczos3;
-use image::{DynamicImage, GrayImage, Rgb};
+use image::{DynamicImage, GrayImage, Rgb, RgbImage};
 use imageproc::contours::Contour;
 use imageproc::drawing::{draw_cross_mut, draw_filled_rect_mut, draw_line_segment_mut};
 use imageproc::rect::Rect;
+use logging_timer::{finish, time, timer};
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
+use timing_marks::PartialTimingMarks;
 use types::{BallotCardGeometry, BallotPaperSize, Size};
 
 use crate::geometry::{segment_distance, segment_with_length};
@@ -93,10 +98,10 @@ fn get_scanned_ballot_card_geometry(size: (u32, u32)) -> Option<BallotCardGeomet
 }
 
 fn get_contour_bounding_rect(contour: &Contour<u32>) -> Rect {
-    let min_x = contour.points.iter().map(|p| p.x).min().unwrap();
-    let max_x = contour.points.iter().map(|p| p.x).max().unwrap();
-    let min_y = contour.points.iter().map(|p| p.y).min().unwrap();
-    let max_y = contour.points.iter().map(|p| p.y).max().unwrap();
+    let min_x = contour.points.iter().map(|p| p.x).min().unwrap_or(0);
+    let max_x = contour.points.iter().map(|p| p.x).max().unwrap_or(0);
+    let min_y = contour.points.iter().map(|p| p.y).min().unwrap_or(0);
+    let max_y = contour.points.iter().map(|p| p.y).max().unwrap_or(0);
     Rect::at(min_x as i32, min_y as i32).of_size(max_x - min_x + 1, max_y - min_y + 1)
 }
 
@@ -115,13 +120,14 @@ fn is_contour_rectangular(contour: &Contour<u32>) -> bool {
             ]
             .into_iter()
             .min()
-            .unwrap()
+            .unwrap_or(0)
         })
         .sum::<u32>();
     let rectangular_score = error_value as f32 / contour.points.len() as f32;
     rectangular_score < 1.0
 }
 
+#[time]
 fn size_image_to_fit(img: &GrayImage, max_width: u32, max_height: u32) -> GrayImage {
     let aspect_ratio = img.width() as f32 / img.height() as f32;
     let new_width = if aspect_ratio > 1.0 {
@@ -147,118 +153,124 @@ const RAINBOW: [Rgb<u8>; 7] = [
     Rgb([143, 0, 255]),
 ];
 
-fn find_best_line_through_items(rects: &Vec<Rect>, angle: f32, tolerance: f32) -> Vec<Rect> {
-    let best_rects: Vec<&Rect> = rects
-        .par_iter()
-        .fold_with(vec![], |best_rects, rect| {
-            let mut best_rects = best_rects;
-
-            for other_rect in rects.iter() {
-                let rect_center = geometry::center_of_rect(rect);
-                let other_rect_center = geometry::center_of_rect(other_rect);
-                let line_angle = (other_rect_center.y - rect_center.y)
-                    .atan2(other_rect_center.x - rect_center.x);
-
-                if geometry::angle_diff(line_angle, angle) > tolerance {
-                    continue;
-                }
-
-                let rects_intsersecting_line = rects
-                    .iter()
-                    .filter(|r| {
-                        geometry::rect_intersects_line(
-                            r,
-                            &Segment::new(rect_center, other_rect_center),
-                        )
-                    })
-                    .collect::<Vec<&Rect>>();
-
-                if rects_intsersecting_line.len() > best_rects.len() {
-                    best_rects = rects_intsersecting_line;
-                }
-            }
-
-            best_rects
-        })
-        .reduce_with(|best_rects, other_best_rects| {
-            if other_best_rects.len() > best_rects.len() {
-                other_best_rects
-            } else {
-                best_rects
-            }
-        })
-        .unwrap();
-
-    return best_rects.iter().map(|r| **r).collect();
-}
-
+#[time]
 fn debug_image_path(base: &Path, label: &str) -> PathBuf {
     let mut result = PathBuf::from(base);
     result.set_file_name(format!(
         "{}_debug_{}.png",
-        base.file_stem().unwrap().to_str().unwrap(),
+        base.file_stem().unwrap_or_default().to_str().unwrap(),
         label
     ));
     result
 }
 
-fn process_image(image_path: &Path) {
-    let img = image::open(&image_path);
+struct ProcessImageOptions {
+    debug: bool,
+}
 
-    if img.is_err() {
-        eprintln!("Error opening image: {}", image_path.to_str().unwrap());
-        return;
-    }
+#[derive(Debug)]
+enum ProcessImageError {
+    ImageOpenError(PathBuf),
+    UnexpectedDimensionsError((u32, u32)),
+    DebugImageSaveError(PathBuf),
+    MissingTimingMarks(Vec<Rect>),
+}
 
-    let img = img.unwrap().into_luma8();
-    let geometry = get_scanned_ballot_card_geometry(img.dimensions());
+#[time]
+fn process_image(
+    image_path: &Path,
+    options: &ProcessImageOptions,
+) -> Result<(), ProcessImageError> {
+    let debug = options.debug;
 
-    if geometry.is_none() {
-        println!(
-            "Could not find ballot card geometry for image of size {:?}",
-            img.dimensions()
-        );
-        return;
-    }
+    let timer = timer!("image::open()", "path={:?}", image_path);
+    let img = match image::open(&image_path) {
+        Ok(img) => img.into_luma8(),
+        Err(_) => {
+            return Err(ProcessImageError::ImageOpenError(image_path.to_path_buf()));
+        }
+    };
+    finish!(timer);
 
-    let geometry = geometry.unwrap();
+    let geometry = match get_scanned_ballot_card_geometry(img.dimensions()) {
+        Some(geometry) => geometry,
+        None => {
+            return Err(ProcessImageError::UnexpectedDimensionsError(
+                img.dimensions(),
+            ))
+        }
+    };
+
     let img = size_image_to_fit(
         &img,
         geometry.canvas_size.width,
         geometry.canvas_size.height,
     );
 
-    let mut contour_rects_debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
     let contour_rects = find_timing_mark_shapes(&geometry, &img);
 
-    for (i, rect) in contour_rects.iter().enumerate() {
-        draw_filled_rect_mut(
-            &mut contour_rects_debug_image,
-            *rect,
-            RAINBOW[i % RAINBOW.len()],
-        );
-    }
+    if debug {
+        let mut contour_rects_debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
 
-    let contour_rects_debug_image_path = debug_image_path(image_path, "contour_rects");
-    contour_rects_debug_image
-        .save(&contour_rects_debug_image_path)
-        .unwrap();
-    println!(
-        "wrote contour rects debug image: {:?}",
-        contour_rects_debug_image_path
-    );
+        draw_contour_rects_debug_image_mut(&mut contour_rects_debug_image, &contour_rects);
+
+        let contour_rects_debug_image_path = debug_image_path(image_path, "contour_rects");
+        match contour_rects_debug_image.save(&contour_rects_debug_image_path) {
+            Ok(_) => {
+                println!("DEBUG: {:?}", contour_rects_debug_image_path);
+            }
+            Err(_) => {
+                return Err(ProcessImageError::DebugImageSaveError(
+                    contour_rects_debug_image_path.to_path_buf(),
+                ))
+            }
+        }
+    }
 
     let partial_timing_marks =
-        find_partial_timing_marks_from_candidate_rects(&geometry, &contour_rects);
+        match find_partial_timing_marks_from_candidate_rects(&geometry, &contour_rects) {
+            Some(partial_timing_marks) => partial_timing_marks,
+            None => return Err(ProcessImageError::MissingTimingMarks(contour_rects)),
+        };
 
-    if partial_timing_marks.is_none() {
-        return;
+    if debug {
+        let mut find_best_fit_line_debug_image = DynamicImage::ImageLuma8(img).into_rgb8();
+        draw_best_fit_line_debug_image_mut(
+            &mut find_best_fit_line_debug_image,
+            &geometry,
+            &partial_timing_marks,
+        );
+
+        let find_best_fit_line_debug_image_path =
+            debug_image_path(image_path, "find_best_fit_line");
+        match find_best_fit_line_debug_image.save(&find_best_fit_line_debug_image_path) {
+            Ok(_) => {
+                println!("DEBUG: {:?}", find_best_fit_line_debug_image_path);
+            }
+            Err(_) => {
+                return Err(ProcessImageError::DebugImageSaveError(
+                    find_best_fit_line_debug_image_path.to_path_buf(),
+                ))
+            }
+        }
     }
-    let partial_timing_marks = partial_timing_marks.unwrap();
 
-    let mut find_best_fit_line_debug_image = DynamicImage::ImageLuma8(img).into_rgb8();
+    return Ok(());
+}
+
+fn draw_contour_rects_debug_image_mut(canvas: &mut RgbImage, contour_rects: &Vec<Rect>) {
+    for (i, rect) in contour_rects.iter().enumerate() {
+        draw_filled_rect_mut(canvas, *rect, RAINBOW[i % RAINBOW.len()]);
+    }
+}
+
+fn draw_best_fit_line_debug_image_mut(
+    canvas: &mut RgbImage,
+    geometry: &BallotCardGeometry,
+    partial_timing_marks: &PartialTimingMarks,
+) {
     draw_line_segment_mut(
-        &mut find_best_fit_line_debug_image,
+        canvas,
         (
             partial_timing_marks.top_left_corner.x,
             partial_timing_marks.top_left_corner.y,
@@ -271,7 +283,7 @@ fn process_image(image_path: &Path) {
     );
 
     draw_line_segment_mut(
-        &mut find_best_fit_line_debug_image,
+        canvas,
         (
             partial_timing_marks.bottom_left_corner.x,
             partial_timing_marks.bottom_left_corner.y,
@@ -284,7 +296,7 @@ fn process_image(image_path: &Path) {
     );
 
     draw_line_segment_mut(
-        &mut find_best_fit_line_debug_image,
+        canvas,
         (
             partial_timing_marks.top_left_corner.x,
             partial_timing_marks.top_left_corner.y,
@@ -297,7 +309,7 @@ fn process_image(image_path: &Path) {
     );
 
     draw_line_segment_mut(
-        &mut find_best_fit_line_debug_image,
+        canvas,
         (
             partial_timing_marks.top_right_corner.x,
             partial_timing_marks.top_right_corner.y,
@@ -310,88 +322,66 @@ fn process_image(image_path: &Path) {
     );
 
     for rect in &partial_timing_marks.top_rects {
-        draw_filled_rect_mut(&mut find_best_fit_line_debug_image, *rect, Rgb([0, 255, 0]));
+        draw_filled_rect_mut(canvas, *rect, Rgb([0, 255, 0]));
     }
     for rect in &partial_timing_marks.bottom_rects {
-        draw_filled_rect_mut(&mut find_best_fit_line_debug_image, *rect, Rgb([0, 0, 255]));
+        draw_filled_rect_mut(canvas, *rect, Rgb([0, 0, 255]));
     }
     for rect in &partial_timing_marks.left_rects {
-        draw_filled_rect_mut(&mut find_best_fit_line_debug_image, *rect, Rgb([255, 0, 0]));
+        draw_filled_rect_mut(canvas, *rect, Rgb([255, 0, 0]));
     }
     for rect in &partial_timing_marks.right_rects {
-        draw_filled_rect_mut(
-            &mut find_best_fit_line_debug_image,
-            *rect,
-            Rgb([0, 255, 255]),
-        );
+        draw_filled_rect_mut(canvas, *rect, Rgb([0, 255, 255]));
     }
 
     if let Some(top_left_corner) = partial_timing_marks.top_left_rect {
-        draw_filled_rect_mut(
-            &mut find_best_fit_line_debug_image,
-            top_left_corner,
-            Rgb([255, 0, 255]),
-        );
+        draw_filled_rect_mut(canvas, top_left_corner, Rgb([255, 0, 255]));
     }
 
     if let Some(top_right_corner) = partial_timing_marks.top_right_rect {
-        draw_filled_rect_mut(
-            &mut find_best_fit_line_debug_image,
-            top_right_corner,
-            Rgb([255, 0, 255]),
-        );
+        draw_filled_rect_mut(canvas, top_right_corner, Rgb([255, 0, 255]));
     }
 
     if let Some(bottom_left_corner) = partial_timing_marks.bottom_left_rect {
-        draw_filled_rect_mut(
-            &mut find_best_fit_line_debug_image,
-            bottom_left_corner,
-            Rgb([255, 0, 255]),
-        );
+        draw_filled_rect_mut(canvas, bottom_left_corner, Rgb([255, 0, 255]));
     }
 
     if let Some(bottom_right_corner) = partial_timing_marks.bottom_right_rect {
-        draw_filled_rect_mut(
-            &mut find_best_fit_line_debug_image,
-            bottom_right_corner,
-            Rgb([255, 0, 255]),
-        );
+        draw_filled_rect_mut(canvas, bottom_right_corner, Rgb([255, 0, 255]));
     }
 
     draw_cross_mut(
-        &mut find_best_fit_line_debug_image,
+        canvas,
         Rgb([255, 255, 255]),
         partial_timing_marks.top_left_corner.x.round() as i32,
         partial_timing_marks.top_left_corner.y.round() as i32,
     );
 
     draw_cross_mut(
-        &mut find_best_fit_line_debug_image,
+        canvas,
         Rgb([255, 255, 255]),
         partial_timing_marks.top_right_corner.x.round() as i32,
         partial_timing_marks.top_right_corner.y.round() as i32,
     );
 
     draw_cross_mut(
-        &mut find_best_fit_line_debug_image,
+        canvas,
         Rgb([255, 255, 255]),
         partial_timing_marks.bottom_left_corner.x.round() as i32,
         partial_timing_marks.bottom_left_corner.y.round() as i32,
     );
 
     draw_cross_mut(
-        &mut find_best_fit_line_debug_image,
+        canvas,
         Rgb([255, 255, 255]),
         partial_timing_marks.bottom_right_corner.x.round() as i32,
         partial_timing_marks.bottom_right_corner.y.round() as i32,
     );
 
-    let top_line_distance = segment_distance(
-        &Segment::new(
-            partial_timing_marks.top_left_corner,
-            partial_timing_marks.top_right_corner,
-        )
-    );
+    let top_line_distance = segment_distance(&Segment::new(
+        partial_timing_marks.top_left_corner,
+        partial_timing_marks.top_right_corner,
+    ));
     let _top_line_distance_per_segment =
         top_line_distance / ((geometry.grid_size.width - 1) as f32);
     let bottom_line_distance = segment_distance(&Segment::new(
@@ -402,26 +392,32 @@ fn process_image(image_path: &Path) {
         bottom_line_distance / ((geometry.grid_size.width - 1) as f32);
     for i in 0..geometry.grid_size.width {
         let expected_top_timing_mark_center = segment_with_length(
-            &Segment::new(partial_timing_marks.top_left_corner, partial_timing_marks.top_right_corner),
+            &Segment::new(
+                partial_timing_marks.top_left_corner,
+                partial_timing_marks.top_right_corner,
+            ),
             top_line_distance * (i as f32),
         )
         .end;
 
         draw_cross_mut(
-            &mut find_best_fit_line_debug_image,
+            canvas,
             Rgb([0, 127, 0]),
             expected_top_timing_mark_center.x.round() as i32,
             expected_top_timing_mark_center.y.round() as i32,
         );
 
         let expected_bottom_timing_mark_center = segment_with_length(
-            &Segment::new(partial_timing_marks.bottom_left_corner, partial_timing_marks.bottom_right_corner),
+            &Segment::new(
+                partial_timing_marks.bottom_left_corner,
+                partial_timing_marks.bottom_right_corner,
+            ),
             bottom_line_distance * (i as f32),
         )
         .end;
 
         draw_cross_mut(
-            &mut find_best_fit_line_debug_image,
+            canvas,
             Rgb([0, 0, 127]),
             expected_bottom_timing_mark_center.x.round() as i32,
             expected_bottom_timing_mark_center.y.round() as i32,
@@ -429,65 +425,77 @@ fn process_image(image_path: &Path) {
     }
 
     let left_line_distance = segment_distance(&Segment::new(
-        partial_timing_marks.top_left_corner, partial_timing_marks.bottom_left_corner,
+        partial_timing_marks.top_left_corner,
+        partial_timing_marks.bottom_left_corner,
     ));
     let left_line_distance_per_segment =
         left_line_distance / ((geometry.grid_size.height - 1) as f32);
     let right_line_distance = segment_distance(&Segment::new(
-        partial_timing_marks.top_right_corner, partial_timing_marks.bottom_right_corner,
+        partial_timing_marks.top_right_corner,
+        partial_timing_marks.bottom_right_corner,
     ));
     let right_line_distance_per_segment =
         right_line_distance / ((geometry.grid_size.height - 1) as f32);
     for i in 0..geometry.grid_size.height {
         let expected_left_timing_mark_center = segment_with_length(
-            &Segment::new(partial_timing_marks.top_left_corner, partial_timing_marks.bottom_left_corner),
+            &Segment::new(
+                partial_timing_marks.top_left_corner,
+                partial_timing_marks.bottom_left_corner,
+            ),
             left_line_distance_per_segment * (i as f32),
         )
         .end;
 
         draw_cross_mut(
-            &mut find_best_fit_line_debug_image,
+            canvas,
             Rgb([127, 0, 0]),
             expected_left_timing_mark_center.x.round() as i32,
             expected_left_timing_mark_center.y.round() as i32,
         );
 
         let expected_right_timing_mark_center = segment_with_length(
-            &Segment::new(partial_timing_marks.top_right_corner, partial_timing_marks.bottom_right_corner),
+            &Segment::new(
+                partial_timing_marks.top_right_corner,
+                partial_timing_marks.bottom_right_corner,
+            ),
             right_line_distance_per_segment * (i as f32),
         )
         .end;
 
         draw_cross_mut(
-            &mut find_best_fit_line_debug_image,
+            canvas,
             Rgb([0, 127, 127]),
             expected_right_timing_mark_center.x.round() as i32,
             expected_right_timing_mark_center.y.round() as i32,
         );
     }
-
-    let find_best_fit_line_debug_image_path = debug_image_path(image_path, "find_best_fit_line");
-    find_best_fit_line_debug_image
-        .save(&find_best_fit_line_debug_image_path)
-        .unwrap();
-    println!(
-        "wrote find_best_fit_line debug image: {:?}",
-        find_best_fit_line_debug_image_path
-    );
 }
 
 fn main() {
-    // get command line arguments
-    let args: Vec<String> = env::args().collect();
+    pretty_env_logger::init_custom_env("LOG");
 
-    if args.len() < 2 {
-        eprintln!("Usage: {} <image>", args[0]);
-        return;
-    }
+    let matches = cli().get_matches();
+    let debug = matches.get_flag("debug");
+    let images: Vec<&String> = matches
+        .get_many::<String>("image")
+        .unwrap_or_default()
+        .collect();
 
-    let start = Instant::now();
-    args[1..].par_iter().for_each(|image_path| {
-        process_image(Path::new(image_path));
+    let options = ProcessImageOptions { debug };
+    let timer = timer!("total");
+    images.par_iter().for_each(|image_path| {
+        match process_image(Path::new(image_path), &options) {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error processing image {}: {:?}", image_path, e);
+            }
+        }
     });
-    println!("total time: {:?}", start.elapsed());
+    finish!(timer);
+}
+
+fn cli() -> Command {
+    command!()
+        .arg(arg!(-d --debug "Enable debug mode"))
+        .arg(arg!([image]... "Images to process"))
 }

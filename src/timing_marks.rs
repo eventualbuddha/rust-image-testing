@@ -1,4 +1,4 @@
-use std::{f32::consts::PI, time::Instant};
+use std::f32::consts::PI;
 
 use image::GrayImage;
 use imageproc::{
@@ -7,10 +7,10 @@ use imageproc::{
     point::Point,
     rect::Rect,
 };
+use logging_timer::time;
 
 use crate::{
-    find_best_line_through_items,
-    geometry::{center_of_rect, intersection_of_lines, segment_distance, Segment},
+    geometry::{center_of_rect, find_best_line_through_items, intersection_of_lines, segment_distance, Segment},
     get_contour_bounding_rect, is_contour_rectangular,
     types::BallotCardGeometry,
 };
@@ -32,8 +32,11 @@ pub struct PartialTimingMarks {
     pub bottom_right_rect: Option<Rect>,
 }
 
-pub fn find_timing_mark_shapes(geometry: &BallotCardGeometry, img: &GrayImage) -> Vec<Rect> {
-    let start = Instant::now();
+#[time]
+pub fn find_timing_mark_shapes(
+    geometry: &BallotCardGeometry,
+    img: &GrayImage,
+) -> Vec<Rect> {
     let threshold = otsu_level(img);
     let contours = find_contours_with_threshold(img, threshold);
     let contour_rects = contours
@@ -53,10 +56,10 @@ pub fn find_timing_mark_shapes(geometry: &BallotCardGeometry, img: &GrayImage) -
         })
         .collect::<Vec<Rect>>();
 
-    println!("contour time: {:?}", start.elapsed());
     contour_rects
 }
 
+#[time]
 pub fn find_partial_timing_marks_from_candidate_rects(
     geometry: &BallotCardGeometry,
     rects: &[Rect],

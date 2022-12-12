@@ -2,6 +2,7 @@ use std::f32::consts::PI;
 
 use imageproc::point::Point;
 use imageproc::rect::Rect;
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 
 /// A line segment from `start` to `end`.
 pub struct Segment<T> {
@@ -208,4 +209,49 @@ mod normalize_center_of_rect {
             prop_assert!(center.y <= (rect.bottom() as f32));
         }
     }
+}
+
+pub fn find_best_line_through_items(rects: &Vec<Rect>, angle: f32, tolerance: f32) -> Vec<Rect> {
+    let best_rects: Vec<&Rect> = rects
+        .par_iter()
+        .fold_with(vec![], |best_rects, rect| {
+            let mut best_rects = best_rects;
+
+            for other_rect in rects.iter() {
+                let rect_center = center_of_rect(rect);
+                let other_rect_center = center_of_rect(other_rect);
+                let line_angle = (other_rect_center.y - rect_center.y)
+                    .atan2(other_rect_center.x - rect_center.x);
+
+                if angle_diff(line_angle, angle) > tolerance {
+                    continue;
+                }
+
+                let rects_intsersecting_line = rects
+                    .iter()
+                    .filter(|r| {
+                        rect_intersects_line(
+                            r,
+                            &Segment::new(rect_center, other_rect_center),
+                        )
+                    })
+                    .collect::<Vec<&Rect>>();
+
+                if rects_intsersecting_line.len() > best_rects.len() {
+                    best_rects = rects_intsersecting_line;
+                }
+            }
+
+            best_rects
+        })
+        .reduce_with(|best_rects, other_best_rects| {
+            if other_best_rects.len() > best_rects.len() {
+                other_best_rects
+            } else {
+                best_rects
+            }
+        })
+        .unwrap();
+
+    return best_rects.iter().map(|r| **r).collect();
 }
