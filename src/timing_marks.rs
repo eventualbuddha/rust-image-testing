@@ -10,7 +10,7 @@ use imageproc::{
 use logging_timer::time;
 
 use crate::{
-    geometry::{center_of_rect, find_best_line_through_items, intersection_of_lines, segment_distance, Segment},
+    geometry::{center_of_rect, find_best_line_through_items, intersection_of_lines, Segment},
     get_contour_bounding_rect, is_contour_rectangular,
     types::BallotCardGeometry,
 };
@@ -290,7 +290,7 @@ pub fn rect_could_be_timing_mark(geometry: &BallotCardGeometry, rect: &Rect) -> 
 pub fn distances_between_rects(rects: &[Rect]) -> Vec<f32> {
     let mut distances = rects
         .windows(2)
-        .map(|w| segment_distance(&Segment::new(center_of_rect(&w[1]), center_of_rect(&w[0]))))
+        .map(|w| Segment::new(center_of_rect(&w[1]), center_of_rect(&w[0])).length())
         .collect::<Vec<f32>>();
     distances.sort_by(|a, b| a.partial_cmp(b).expect("comparison of non-NaN to succeed"));
     distances

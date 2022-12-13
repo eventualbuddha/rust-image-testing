@@ -17,7 +17,7 @@ use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use timing_marks::PartialTimingMarks;
 use types::{BallotCardGeometry, BallotPaperSize, Size};
 
-use crate::geometry::{segment_distance, segment_with_length};
+use crate::geometry::segment_with_length;
 use crate::timing_marks::{
     find_partial_timing_marks_from_candidate_rects, find_timing_mark_shapes,
 };
@@ -378,16 +378,18 @@ fn draw_best_fit_line_debug_image_mut(
         partial_timing_marks.bottom_right_corner.y.round() as i32,
     );
 
-    let top_line_distance = segment_distance(&Segment::new(
+    let top_line_distance = Segment::new(
         partial_timing_marks.top_left_corner,
         partial_timing_marks.top_right_corner,
-    ));
+    )
+    .length();
     let _top_line_distance_per_segment =
         top_line_distance / ((geometry.grid_size.width - 1) as f32);
-    let bottom_line_distance = segment_distance(&Segment::new(
+    let bottom_line_distance = Segment::new(
         partial_timing_marks.bottom_left_corner,
         partial_timing_marks.bottom_right_corner,
-    ));
+    )
+    .length();
     let _bottom_line_distance_per_segment =
         bottom_line_distance / ((geometry.grid_size.width - 1) as f32);
     for i in 0..geometry.grid_size.width {
@@ -424,16 +426,18 @@ fn draw_best_fit_line_debug_image_mut(
         );
     }
 
-    let left_line_distance = segment_distance(&Segment::new(
+    let left_line_distance = Segment::new(
         partial_timing_marks.top_left_corner,
         partial_timing_marks.bottom_left_corner,
-    ));
+    )
+    .length();
     let left_line_distance_per_segment =
         left_line_distance / ((geometry.grid_size.height - 1) as f32);
-    let right_line_distance = segment_distance(&Segment::new(
+    let right_line_distance = Segment::new(
         partial_timing_marks.top_right_corner,
         partial_timing_marks.bottom_right_corner,
-    ));
+    )
+    .length();
     let right_line_distance_per_segment =
         right_line_distance / ((geometry.grid_size.height - 1) as f32);
     for i in 0..geometry.grid_size.height {

@@ -5,15 +5,45 @@ use imageproc::rect::Rect;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 
 /// A line segment from `start` to `end`.
-pub struct Segment<T> {
-    pub start: Point<T>,
-    pub end: Point<T>,
+pub struct Segment {
+    pub start: Point<f32>,
+    pub end: Point<f32>,
 }
 
-impl<T> Segment<T> {
+impl Segment {
     /// Creates a new line segment from `start` to `end`.
-    pub const fn new(start: Point<T>, end: Point<T>) -> Self {
+    pub const fn new(start: Point<f32>, end: Point<f32>) -> Self {
         Self { start, end }
+    }
+
+    /// Computes the length of the segment.
+    pub fn length(&self) -> f32 {
+        let dx = self.end.x - self.start.x;
+        let dy = self.end.y - self.start.y;
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    /// Generates a new segment based on the given segment, but with the
+    /// given length. The new segment will have the same start point as the
+    /// given segment, but the end point will be the given length away from
+    /// the start point. The angle of the new segment will be the same as
+    /// the given segment.
+    pub fn with_length(&self, length: f32) -> Self {
+        let dx = self.end.x - self.start.x;
+        let dy = self.end.y - self.start.y;
+        let angle = dy.atan2(dx);
+        let end = Point::new(
+            length.mul_add(angle.cos(), self.start.x),
+            length.mul_add(angle.sin(), self.start.y),
+        );
+        Self::new(self.start, end)
+    }
+
+    /// Computes a vector from the start point to the end point.
+    pub fn vector(&self) -> Point<f32> {
+        let dx = self.end.x - self.start.x;
+        let dy = self.end.y - self.start.y;
+        Point::new(dx, dy)
     }
 }
 
@@ -22,8 +52,8 @@ impl<T> Segment<T> {
 /// segments. If `bounded` is set to `false`, the intersection point may be
 /// outside the bounds of either segment.
 pub fn intersection_of_lines(
-    segment1: &Segment<f32>,
-    segment2: &Segment<f32>,
+    segment1: &Segment,
+    segment2: &Segment,
     bounded: bool,
 ) -> Option<Point<f32>> {
     let p1 = segment1.start;
@@ -46,12 +76,12 @@ pub fn intersection_of_lines(
 }
 
 /// Determines whether the two line segments intersect.
-pub fn segments_intersect(line1: &Segment<f32>, line2: &Segment<f32>) -> bool {
+pub fn segments_intersect(line1: &Segment, line2: &Segment) -> bool {
     intersection_of_lines(line1, line2, true).is_some()
 }
 
 /// Determines whether a line segment intersects a rectangle.
-pub fn rect_intersects_line(rect: &Rect, line: &Segment<f32>) -> bool {
+pub fn rect_intersects_line(rect: &Rect, line: &Segment) -> bool {
     let top_left = Point::new(rect.left() as f32, rect.top() as f32);
     let top_right = Point::new(rect.right() as f32, rect.top() as f32);
     let bottom_left = Point::new(rect.left() as f32, rect.bottom() as f32);
@@ -91,19 +121,12 @@ pub fn normalize_angle(angle: f32) -> f32 {
     angle
 }
 
-/// Gets the distance between the two points of a line segment.
-pub fn segment_distance(segment: &Segment<f32>) -> f32 {
-    let p1 = segment.start;
-    let p2 = segment.end;
-    ((p1.x - p2.x).powi(2) + (p1.y - p2.y).powi(2)).sqrt()
-}
-
 /// Generates a new segment based on the given segment, but with the
 /// given length. The new segment will have the same start point as the
 /// given segment, but the end point will be the given length away from
 /// the start point. The angle of the new segment will be the same as
 /// the given segment.
-pub fn segment_with_length(segment: &Segment<f32>, length: f32) -> Segment<f32> {
+pub fn segment_with_length(segment: &Segment, length: f32) -> Segment {
     let p1 = segment.start;
     let p2 = segment.end;
     let angle = (p2.y - p1.y).atan2(p2.x - p1.x);
@@ -230,10 +253,7 @@ pub fn find_best_line_through_items(rects: &Vec<Rect>, angle: f32, tolerance: f3
                 let rects_intsersecting_line = rects
                     .iter()
                     .filter(|r| {
-                        rect_intersects_line(
-                            r,
-                            &Segment::new(rect_center, other_rect_center),
-                        )
+                        rect_intersects_line(r, &Segment::new(rect_center, other_rect_center))
                     })
                     .collect::<Vec<&Rect>>();
 
