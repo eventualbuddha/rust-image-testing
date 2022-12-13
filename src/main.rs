@@ -19,6 +19,7 @@ use types::{BallotCardGeometry, BallotPaperSize, Size};
 
 use crate::geometry::segment_with_length;
 use crate::timing_marks::{
+    find_complete_timing_marks_from_partial_timing_marks,
     find_partial_timing_marks_from_candidate_rects, find_timing_mark_shapes,
 };
 
@@ -233,7 +234,7 @@ fn process_image(
         };
 
     if debug {
-        let mut find_best_fit_line_debug_image = DynamicImage::ImageLuma8(img).into_rgb8();
+        let mut find_best_fit_line_debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
         draw_best_fit_line_debug_image_mut(
             &mut find_best_fit_line_debug_image,
             &geometry,
@@ -253,6 +254,49 @@ fn process_image(
             }
         }
     }
+
+    match find_complete_timing_marks_from_partial_timing_marks(
+        &partial_timing_marks,
+        &geometry,
+    ) {
+        None => {}
+        Some(complete_timing_marks) => {
+            if debug {
+                let mut debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
+                draw_best_fit_line_debug_image_mut(
+                    &mut debug_image,
+                    &geometry,
+                    &PartialTimingMarks {
+                        geometry: complete_timing_marks.geometry,
+                        top_left_corner: complete_timing_marks.top_left_corner,
+                        top_right_corner: complete_timing_marks.top_right_corner,
+                        bottom_left_corner: complete_timing_marks.bottom_left_corner,
+                        bottom_right_corner: complete_timing_marks.bottom_right_corner,
+                        top_rects: complete_timing_marks.top_rects,
+                        bottom_rects: complete_timing_marks.bottom_rects,
+                        left_rects: complete_timing_marks.left_rects,
+                        right_rects: complete_timing_marks.right_rects,
+                        top_left_rect: Some(complete_timing_marks.top_left_rect),
+                        top_right_rect: Some(complete_timing_marks.top_right_rect),
+                        bottom_left_rect: Some(complete_timing_marks.bottom_left_rect),
+                        bottom_right_rect: Some(complete_timing_marks.bottom_right_rect),
+                    },
+                );
+
+                let debug_image_path = debug_image_path(image_path, "complete_timing_marks");
+                match debug_image.save(&debug_image_path) {
+                    Ok(_) => {
+                        println!("DEBUG: {:?}", debug_image_path);
+                    }
+                    Err(_) => {
+                        return Err(ProcessImageError::DebugImageSaveError(
+                            debug_image_path.to_path_buf(),
+                        ))
+                    }
+                }
+            }
+        }
+    };
 
     return Ok(());
 }
@@ -486,14 +530,14 @@ fn main() {
 
     let options = ProcessImageOptions { debug };
     let timer = timer!("total");
-    images.par_iter().for_each(|image_path| {
-        match process_image(Path::new(image_path), &options) {
+    images.par_iter().for_each(
+        |image_path| match process_image(Path::new(image_path), &options) {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("Error processing image {}: {:?}", image_path, e);
             }
-        }
-    });
+        },
+    );
     finish!(timer);
 }
 

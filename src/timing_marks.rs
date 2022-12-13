@@ -16,6 +16,7 @@ use crate::{
 };
 
 /// Represents partial timing marks found in a ballot card.
+#[derive(Debug)]
 pub struct PartialTimingMarks {
     pub geometry: BallotCardGeometry,
     pub top_left_corner: Point<f32>,
@@ -32,11 +33,25 @@ pub struct PartialTimingMarks {
     pub bottom_right_rect: Option<Rect>,
 }
 
+#[derive(Debug)]
+pub struct CompleteTimingMarks {
+    pub geometry: BallotCardGeometry,
+    pub top_left_corner: Point<f32>,
+    pub top_right_corner: Point<f32>,
+    pub bottom_left_corner: Point<f32>,
+    pub bottom_right_corner: Point<f32>,
+    pub top_rects: Vec<Rect>,
+    pub bottom_rects: Vec<Rect>,
+    pub left_rects: Vec<Rect>,
+    pub right_rects: Vec<Rect>,
+    pub top_left_rect: Rect,
+    pub top_right_rect: Rect,
+    pub bottom_left_rect: Rect,
+    pub bottom_right_rect: Rect,
+}
+
 #[time]
-pub fn find_timing_mark_shapes(
-    geometry: &BallotCardGeometry,
-    img: &GrayImage,
-) -> Vec<Rect> {
+pub fn find_timing_mark_shapes(geometry: &BallotCardGeometry, img: &GrayImage) -> Vec<Rect> {
     let threshold = otsu_level(img);
     let contours = find_contours_with_threshold(img, threshold);
     let contour_rects = contours
@@ -97,13 +112,6 @@ pub fn find_partial_timing_marks_from_candidate_rects(
     bottom_line.sort_by(|a, b| a.left().partial_cmp(&b.left()).unwrap());
     left_line.sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap());
     right_line.sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap());
-
-    let mut all_distances = vec![];
-    all_distances.append(&mut distances_between_rects(&top_line));
-    all_distances.append(&mut distances_between_rects(&bottom_line));
-    all_distances.append(&mut distances_between_rects(&left_line));
-    all_distances.append(&mut distances_between_rects(&right_line));
-    all_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
     let top_start_rect_center = center_of_rect(top_line.first().unwrap());
     let top_last_rect_center = center_of_rect(top_line.last().unwrap());
@@ -272,6 +280,171 @@ pub fn find_partial_timing_marks_from_candidate_rects(
         left_rects: left_line,
         right_rects: right_line,
     })
+}
+
+#[time]
+pub fn find_complete_timing_marks_from_partial_timing_marks(
+    partial_timing_marks: &PartialTimingMarks,
+    geometry: &BallotCardGeometry,
+) -> Option<CompleteTimingMarks> {
+    let top_line = &partial_timing_marks.top_rects;
+    let bottom_line = &partial_timing_marks.bottom_rects;
+    let left_line = &partial_timing_marks.left_rects;
+    let right_line = &partial_timing_marks.right_rects;
+    let (top_left_rect, top_right_rect, bottom_left_rect, bottom_right_rect) = match (
+        &partial_timing_marks.top_left_rect,
+        &partial_timing_marks.top_right_rect,
+        &partial_timing_marks.bottom_left_rect,
+        &partial_timing_marks.bottom_right_rect,
+    ) {
+        (
+            Some(top_left_rect),
+            Some(top_right_rect),
+            Some(bottom_left_rect),
+            Some(bottom_right_rect),
+        ) => (
+            top_left_rect,
+            top_right_rect,
+            bottom_left_rect,
+            bottom_right_rect,
+        ),
+        _ => return None,
+    };
+
+    let mut all_distances = vec![];
+    all_distances.append(&mut distances_between_rects(&top_line));
+    all_distances.append(&mut distances_between_rects(&bottom_line));
+    all_distances.append(&mut distances_between_rects(&left_line));
+    all_distances.append(&mut distances_between_rects(&right_line));
+    all_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    if all_distances.is_empty() {
+        return None;
+    }
+
+    let median_distance = all_distances[all_distances.len() / 2];
+
+    let top_line = infer_missing_timing_marks_on_segment(
+        &top_line,
+        &Segment::new(
+            partial_timing_marks.top_left_corner,
+            partial_timing_marks.top_right_corner,
+        ),
+        median_distance,
+        geometry.grid_size.width,
+        &geometry,
+    );
+
+    let bottom_line = infer_missing_timing_marks_on_segment(
+        &bottom_line,
+        &Segment::new(
+            partial_timing_marks.bottom_left_corner,
+            partial_timing_marks.bottom_right_corner,
+        ),
+        median_distance,
+        geometry.grid_size.width,
+        &geometry,
+    );
+
+    let left_line = infer_missing_timing_marks_on_segment(
+        &left_line,
+        &Segment::new(
+            partial_timing_marks.top_left_corner,
+            partial_timing_marks.bottom_left_corner,
+        ),
+        median_distance,
+        geometry.grid_size.height,
+        &geometry,
+    );
+
+    let right_line = infer_missing_timing_marks_on_segment(
+        &right_line,
+        &Segment::new(
+            partial_timing_marks.top_right_corner,
+            partial_timing_marks.bottom_right_corner,
+        ),
+        median_distance,
+        geometry.grid_size.height,
+        &geometry,
+    );
+
+    if top_line.len() != bottom_line.len() || left_line.len() != right_line.len() {
+        return None;
+    }
+
+    Some(CompleteTimingMarks {
+        geometry: *geometry,
+        top_rects: top_line,
+        bottom_rects: bottom_line,
+        left_rects: left_line,
+        right_rects: right_line,
+        top_left_corner: partial_timing_marks.top_left_corner,
+        top_right_corner: partial_timing_marks.top_right_corner,
+        bottom_left_corner: partial_timing_marks.bottom_left_corner,
+        bottom_right_corner: partial_timing_marks.bottom_right_corner,
+        top_left_rect: *top_left_rect,
+        top_right_rect: *top_right_rect,
+        bottom_left_rect: *bottom_left_rect,
+        bottom_right_rect: *bottom_right_rect,
+    })
+}
+
+/// Infers missing timing marks along a segment. It's expected that there are
+/// timing marks centered at the start and end of the segment and that the
+/// distance between them is roughly `expected_distance`. There should be
+/// exactly `expected_count` timing marks along the segment.
+fn infer_missing_timing_marks_on_segment(
+    timing_marks: &[Rect],
+    segment: &Segment,
+    expected_distance: f32,
+    expected_count: u32,
+    geometry: &BallotCardGeometry,
+) -> Vec<Rect> {
+    if timing_marks.is_empty() {
+        return vec![];
+    }
+
+    let mut inferred_timing_marks = vec![];
+    let mut current_timing_mark_center = segment.start;
+    let next_point_vector = segment.with_length(expected_distance).vector();
+    let maximum_error = expected_distance / 2.0;
+    while inferred_timing_marks.len() < expected_count as usize {
+        // find the point closest existing timing mark
+        let closest_rect = timing_marks
+            .iter()
+            .min_by(|a, b| {
+                let a_distance =
+                    Segment::new(center_of_rect(*a), current_timing_mark_center).length();
+                let b_distance =
+                    Segment::new(center_of_rect(*b), current_timing_mark_center).length();
+                a_distance.partial_cmp(&b_distance).unwrap()
+            })
+            .unwrap();
+
+        // if the closest timing mark is close enough, use it
+        if Segment::new(center_of_rect(closest_rect), current_timing_mark_center).length()
+            <= maximum_error
+        {
+            inferred_timing_marks.push(*closest_rect);
+            current_timing_mark_center = center_of_rect(closest_rect) + next_point_vector;
+        } else {
+            // otherwise, we need to fill in a point
+            inferred_timing_marks.push(
+                Rect::at(
+                    (current_timing_mark_center.x - geometry.timing_mark_size.width / 2.0).round()
+                        as i32,
+                    (current_timing_mark_center.y - geometry.timing_mark_size.height / 2.0).round()
+                        as i32,
+                )
+                .of_size(
+                    geometry.timing_mark_size.width.round() as u32,
+                    geometry.timing_mark_size.height.round() as u32,
+                ),
+            );
+            current_timing_mark_center = current_timing_mark_center + next_point_vector;
+        }
+    }
+    inferred_timing_marks
 }
 
 /// Determines whether a rect could be a timing mark based on its size.
