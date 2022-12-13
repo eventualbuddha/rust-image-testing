@@ -153,7 +153,6 @@ const RAINBOW: [Rgb<u8>; 7] = [
     Rgb([143, 0, 255]),
 ];
 
-#[time]
 fn debug_image_path(base: &Path, label: &str) -> PathBuf {
     let mut result = PathBuf::from(base);
     result.set_file_name(format!(
