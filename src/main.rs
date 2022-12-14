@@ -10,7 +10,11 @@ use image::imageops::resize;
 use image::imageops::FilterType::Lanczos3;
 use image::{DynamicImage, GrayImage, Rgb, RgbImage};
 use imageproc::contours::Contour;
-use imageproc::drawing::{draw_cross_mut, draw_filled_rect_mut, draw_line_segment_mut};
+use imageproc::contrast::otsu_level;
+use imageproc::drawing::{
+    draw_cross_mut, draw_filled_rect_mut, draw_hollow_rect_mut, draw_line_segment_mut,
+};
+use imageproc::point::Point;
 use imageproc::rect::Rect;
 use logging_timer::{finish, time, timer};
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
@@ -20,10 +24,12 @@ use types::{BallotCardGeometry, BallotPaperSize, Size};
 use crate::geometry::segment_with_length;
 use crate::timing_marks::{
     find_complete_timing_marks_from_partial_timing_marks,
-    find_partial_timing_marks_from_candidate_rects, find_timing_mark_shapes,
+    find_partial_timing_marks_from_candidate_rects, find_timing_mark_shapes, load_oval_scan_image,
+    score_oval_mark, TimingMarkGrid,
 };
 
 mod geometry;
+mod image_utils;
 mod timing_marks;
 mod types;
 
@@ -166,6 +172,7 @@ fn debug_image_path(base: &Path, label: &str) -> PathBuf {
 
 struct ProcessImageOptions {
     debug: bool,
+    oval_template: GrayImage,
 }
 
 #[derive(Debug)]
@@ -255,11 +262,13 @@ fn process_image(
         }
     }
 
-    match find_complete_timing_marks_from_partial_timing_marks(
+    let complete_timing_marks = match find_complete_timing_marks_from_partial_timing_marks(
         &partial_timing_marks,
         &geometry,
     ) {
-        None => {}
+        None => {
+            return Err(ProcessImageError::MissingTimingMarks(contour_rects));
+        }
         Some(complete_timing_marks) => {
             if debug {
                 let mut debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
@@ -272,10 +281,10 @@ fn process_image(
                         top_right_corner: complete_timing_marks.top_right_corner,
                         bottom_left_corner: complete_timing_marks.bottom_left_corner,
                         bottom_right_corner: complete_timing_marks.bottom_right_corner,
-                        top_rects: complete_timing_marks.top_rects,
-                        bottom_rects: complete_timing_marks.bottom_rects,
-                        left_rects: complete_timing_marks.left_rects,
-                        right_rects: complete_timing_marks.right_rects,
+                        top_rects: complete_timing_marks.top_rects.clone(),
+                        bottom_rects: complete_timing_marks.bottom_rects.clone(),
+                        left_rects: complete_timing_marks.left_rects.clone(),
+                        right_rects: complete_timing_marks.right_rects.clone(),
                         top_left_rect: Some(complete_timing_marks.top_left_rect),
                         top_right_rect: Some(complete_timing_marks.top_right_rect),
                         bottom_left_rect: Some(complete_timing_marks.bottom_left_rect),
@@ -295,8 +304,59 @@ fn process_image(
                     }
                 }
             }
+            complete_timing_marks
         }
     };
+
+    let grid = TimingMarkGrid::new(geometry, complete_timing_marks);
+
+    if debug {
+        let mut debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
+        draw_timing_mark_grid_debug_image_mut(&mut debug_image, &grid, &geometry);
+
+        let debug_image_path = debug_image_path(image_path, "timing_mark_grid");
+        match debug_image.save(&debug_image_path) {
+            Ok(_) => {
+                println!("DEBUG: {:?}", debug_image_path);
+            }
+            Err(_) => {
+                return Err(ProcessImageError::DebugImageSaveError(
+                    debug_image_path.to_path_buf(),
+                ))
+            }
+        }
+    }
+
+    if let Some(scored_oval_mark) = score_oval_mark(
+        &img,
+        &options.oval_template,
+        &grid,
+        &Point::new(19, 9),
+        7,
+        otsu_level(&img),
+    ) {
+        println!("Scored oval mark: {:?}", scored_oval_mark);
+
+        if debug {
+            let mut debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
+
+            // draw rect around the oval mark
+            let bounds = scored_oval_mark.bounds;
+            draw_hollow_rect_mut(&mut debug_image, bounds, Rgb([u8::MAX, u8::MIN, u8::MIN]));
+
+            let debug_image_path = debug_image_path(image_path, "scored_oval_mark");
+            match debug_image.save(&debug_image_path) {
+                Ok(_) => {
+                    println!("DEBUG: {:?}", debug_image_path);
+                }
+                Err(_) => {
+                    return Err(ProcessImageError::DebugImageSaveError(
+                        debug_image_path.to_path_buf(),
+                    ))
+                }
+            }
+        }
+    }
 
     return Ok(());
 }
@@ -518,6 +578,24 @@ fn draw_best_fit_line_debug_image_mut(
     }
 }
 
+fn draw_timing_mark_grid_debug_image_mut(
+    canvas: &mut RgbImage,
+    timing_mark_grid: &TimingMarkGrid,
+    geometry: &BallotCardGeometry,
+) {
+    for x in 0..geometry.grid_size.width {
+        for y in 0..geometry.grid_size.height {
+            let point = timing_mark_grid.get(x, y).expect("grid point is defined");
+            draw_cross_mut(
+                canvas,
+                Rgb([255, 0, 255]),
+                point.x.round() as i32,
+                point.y.round() as i32,
+            );
+        }
+    }
+}
+
 fn main() {
     pretty_env_logger::init_custom_env("LOG");
 
@@ -528,7 +606,17 @@ fn main() {
         .unwrap_or_default()
         .collect();
 
-    let options = ProcessImageOptions { debug };
+    let oval_scan_image = match load_oval_scan_image() {
+        Some(image) => image,
+        None => {
+            panic!("Error loading oval scan image");
+        }
+    };
+
+    let options = ProcessImageOptions {
+        debug,
+        oval_template: oval_scan_image,
+    };
     let timer = timer!("total");
     images.par_iter().for_each(
         |image_path| match process_image(Path::new(image_path), &options) {
