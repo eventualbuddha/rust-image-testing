@@ -1,7 +1,30 @@
-use image::{GrayImage, Luma};
+use image::{GrayImage, Luma, Rgb};
 
-pub const WHITE: Luma<u8> = Luma([u8::MAX]);
-pub const BLACK: Luma<u8> = Luma([u8::MIN]);
+pub const WHITE: Luma<u8> = Luma([255]);
+pub const BLACK: Luma<u8> = Luma([0]);
+pub const WHITE_RGB: Rgb<u8> = Rgb([255, 255, 255]);
+pub const RED: Rgb<u8> = Rgb([255, 0, 0]);
+pub const DARK_RED: Rgb<u8> = Rgb([127, 0, 0]);
+pub const GREEN: Rgb<u8> = Rgb([0, 255, 0]);
+pub const DARK_GREEN: Rgb<u8> = Rgb([0, 127, 0]);
+pub const BLUE: Rgb<u8> = Rgb([0, 0, 255]);
+pub const DARK_BLUE: Rgb<u8> = Rgb([0, 0, 127]);
+pub const ORANGE: Rgb<u8> = Rgb([255, 127, 0]);
+pub const YELLOW: Rgb<u8> = Rgb([255, 255, 0]);
+pub const INDIGO: Rgb<u8> = Rgb([75, 0, 130]);
+pub const VIOLET: Rgb<u8> = Rgb([143, 0, 255]);
+pub const CYAN: Rgb<u8> = Rgb([0, 255, 255]);
+pub const DARK_CYAN: Rgb<u8> = Rgb([0, 127, 127]);
+pub const PINK: Rgb<u8> = Rgb([255, 0, 255]);
+pub const RAINBOW: [Rgb<u8>; 7] = [
+    RED,
+    ORANGE,
+    YELLOW,
+    GREEN,
+    BLUE,
+    INDIGO,
+    VIOLET,
+];
 
 /// Bleed the given luma value outwards from any pixels that match it.
 pub fn bleed(img: &GrayImage, luma: &Luma<u8>) -> GrayImage {

@@ -5,29 +5,23 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use clap::{arg, command, Command};
-use geometry::Segment;
 use image::imageops::resize;
 use image::imageops::FilterType::Lanczos3;
-use image::{DynamicImage, GrayImage, Rgb, RgbImage};
+use image::{DynamicImage, GrayImage};
 use imageproc::contours::Contour;
-use imageproc::contrast::otsu_level;
-use imageproc::drawing::{
-    draw_cross_mut, draw_filled_rect_mut, draw_hollow_rect_mut, draw_line_segment_mut,
-};
-use imageproc::point::Point;
 use imageproc::rect::Rect;
 use logging_timer::{finish, time, timer};
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
-use timing_marks::PartialTimingMarks;
-use types::{BallotCardGeometry, BallotPaperSize, Size};
+use types::{BallotCardGeometry, BallotPaperSize, BallotSide, Size};
 
-use crate::geometry::segment_with_length;
+use crate::election::Election;
 use crate::timing_marks::{
     find_complete_timing_marks_from_partial_timing_marks,
     find_partial_timing_marks_from_candidate_rects, find_timing_mark_shapes, load_oval_scan_image,
-    score_oval_mark, TimingMarkGrid,
+    score_oval_marks_from_grid_layout, TimingMarkGrid,
 };
 
+mod debug;
+mod election;
 mod geometry;
 mod image_utils;
 mod timing_marks;
@@ -150,29 +144,12 @@ fn size_image_to_fit(img: &GrayImage, max_width: u32, max_height: u32) -> GrayIm
     resize(img, new_width, new_height, Lanczos3)
 }
 
-const RAINBOW: [Rgb<u8>; 7] = [
-    Rgb([255, 0, 0]),
-    Rgb([255, 127, 0]),
-    Rgb([255, 255, 0]),
-    Rgb([0, 255, 0]),
-    Rgb([0, 0, 255]),
-    Rgb([75, 0, 130]),
-    Rgb([143, 0, 255]),
-];
-
-fn debug_image_path(base: &Path, label: &str) -> PathBuf {
-    let mut result = PathBuf::from(base);
-    result.set_file_name(format!(
-        "{}_debug_{}.png",
-        base.file_stem().unwrap_or_default().to_str().unwrap(),
-        label
-    ));
-    result
-}
-
+#[derive(Debug, Clone)]
 struct ProcessImageOptions {
     debug: bool,
     oval_template: GrayImage,
+    election: Election,
+    side: BallotSide,
 }
 
 #[derive(Debug)]
@@ -219,12 +196,12 @@ fn process_image(
     if debug {
         let mut contour_rects_debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
 
-        draw_contour_rects_debug_image_mut(&mut contour_rects_debug_image, &contour_rects);
+        debug::draw_contour_rects_debug_image_mut(&mut contour_rects_debug_image, &contour_rects);
 
-        let contour_rects_debug_image_path = debug_image_path(image_path, "contour_rects");
+        let contour_rects_debug_image_path = debug::debug_image_path(image_path, "contour_rects");
         match contour_rects_debug_image.save(&contour_rects_debug_image_path) {
             Ok(_) => {
-                println!("DEBUG: {:?}", contour_rects_debug_image_path);
+                eprintln!("DEBUG: {:?}", contour_rects_debug_image_path);
             }
             Err(_) => {
                 return Err(ProcessImageError::DebugImageSaveError(
@@ -242,17 +219,17 @@ fn process_image(
 
     if debug {
         let mut find_best_fit_line_debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
-        draw_best_fit_line_debug_image_mut(
+        debug::draw_timing_mark_debug_image_mut(
             &mut find_best_fit_line_debug_image,
             &geometry,
             &partial_timing_marks,
         );
 
         let find_best_fit_line_debug_image_path =
-            debug_image_path(image_path, "find_best_fit_line");
+            debug::debug_image_path(image_path, "find_best_fit_line");
         match find_best_fit_line_debug_image.save(&find_best_fit_line_debug_image_path) {
             Ok(_) => {
-                println!("DEBUG: {:?}", find_best_fit_line_debug_image_path);
+                eprintln!("DEBUG: {:?}", find_best_fit_line_debug_image_path);
             }
             Err(_) => {
                 return Err(ProcessImageError::DebugImageSaveError(
@@ -272,30 +249,16 @@ fn process_image(
         Some(complete_timing_marks) => {
             if debug {
                 let mut debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
-                draw_best_fit_line_debug_image_mut(
+                debug::draw_timing_mark_debug_image_mut(
                     &mut debug_image,
                     &geometry,
-                    &PartialTimingMarks {
-                        geometry: complete_timing_marks.geometry,
-                        top_left_corner: complete_timing_marks.top_left_corner,
-                        top_right_corner: complete_timing_marks.top_right_corner,
-                        bottom_left_corner: complete_timing_marks.bottom_left_corner,
-                        bottom_right_corner: complete_timing_marks.bottom_right_corner,
-                        top_rects: complete_timing_marks.top_rects.clone(),
-                        bottom_rects: complete_timing_marks.bottom_rects.clone(),
-                        left_rects: complete_timing_marks.left_rects.clone(),
-                        right_rects: complete_timing_marks.right_rects.clone(),
-                        top_left_rect: Some(complete_timing_marks.top_left_rect),
-                        top_right_rect: Some(complete_timing_marks.top_right_rect),
-                        bottom_left_rect: Some(complete_timing_marks.bottom_left_rect),
-                        bottom_right_rect: Some(complete_timing_marks.bottom_right_rect),
-                    },
+                    &complete_timing_marks.clone().into(),
                 );
 
-                let debug_image_path = debug_image_path(image_path, "complete_timing_marks");
+                let debug_image_path = debug::debug_image_path(image_path, "complete_timing_marks");
                 match debug_image.save(&debug_image_path) {
                     Ok(_) => {
-                        println!("DEBUG: {:?}", debug_image_path);
+                        eprintln!("DEBUG: {:?}", debug_image_path);
                     }
                     Err(_) => {
                         return Err(ProcessImageError::DebugImageSaveError(
@@ -312,12 +275,12 @@ fn process_image(
 
     if debug {
         let mut debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
-        draw_timing_mark_grid_debug_image_mut(&mut debug_image, &grid, &geometry);
+        debug::draw_timing_mark_grid_debug_image_mut(&mut debug_image, &grid, &geometry);
 
-        let debug_image_path = debug_image_path(image_path, "timing_mark_grid");
+        let debug_image_path = debug::debug_image_path(image_path, "timing_mark_grid");
         match debug_image.save(&debug_image_path) {
             Ok(_) => {
-                println!("DEBUG: {:?}", debug_image_path);
+                eprintln!("DEBUG: {:?}", debug_image_path);
             }
             Err(_) => {
                 return Err(ProcessImageError::DebugImageSaveError(
@@ -327,33 +290,34 @@ fn process_image(
         }
     }
 
-    if let Some(scored_oval_mark) = score_oval_mark(
+    let scored_oval_marks = score_oval_marks_from_grid_layout(
         &img,
         &options.oval_template,
         &grid,
-        &Point::new(19, 9),
-        7,
-        otsu_level(&img),
-    ) {
-        println!("Scored oval mark: {:?}", scored_oval_mark);
+        options
+            .election
+            .grid_layouts
+            .first()
+            .expect("no grid layouts"),
+        options.side,
+    );
 
-        if debug {
-            let mut debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
+    eprintln!("DEBUG: scored_oval_marks: {:?}", scored_oval_marks);
 
-            // draw rect around the oval mark
-            let bounds = scored_oval_mark.bounds;
-            draw_hollow_rect_mut(&mut debug_image, bounds, Rgb([u8::MAX, u8::MIN, u8::MIN]));
+    if debug {
+        let mut debug_image = DynamicImage::ImageLuma8(img.clone()).into_rgb8();
 
-            let debug_image_path = debug_image_path(image_path, "scored_oval_mark");
-            match debug_image.save(&debug_image_path) {
-                Ok(_) => {
-                    println!("DEBUG: {:?}", debug_image_path);
-                }
-                Err(_) => {
-                    return Err(ProcessImageError::DebugImageSaveError(
-                        debug_image_path.to_path_buf(),
-                    ))
-                }
+        debug::draw_scored_oval_marks_debug_image_mut(&mut debug_image, &scored_oval_marks);
+
+        let debug_image_path = debug::debug_image_path(image_path, "scored_oval_mark");
+        match debug_image.save(&debug_image_path) {
+            Ok(_) => {
+                eprintln!("DEBUG: {:?}", debug_image_path);
+            }
+            Err(_) => {
+                return Err(ProcessImageError::DebugImageSaveError(
+                    debug_image_path.to_path_buf(),
+                ))
             }
         }
     }
@@ -361,250 +325,32 @@ fn process_image(
     return Ok(());
 }
 
-fn draw_contour_rects_debug_image_mut(canvas: &mut RgbImage, contour_rects: &Vec<Rect>) {
-    for (i, rect) in contour_rects.iter().enumerate() {
-        draw_filled_rect_mut(canvas, *rect, RAINBOW[i % RAINBOW.len()]);
-    }
-}
-
-fn draw_best_fit_line_debug_image_mut(
-    canvas: &mut RgbImage,
-    geometry: &BallotCardGeometry,
-    partial_timing_marks: &PartialTimingMarks,
-) {
-    draw_line_segment_mut(
-        canvas,
-        (
-            partial_timing_marks.top_left_corner.x,
-            partial_timing_marks.top_left_corner.y,
-        ),
-        (
-            partial_timing_marks.top_right_corner.x,
-            partial_timing_marks.top_right_corner.y,
-        ),
-        Rgb([0, 255, 0]),
-    );
-
-    draw_line_segment_mut(
-        canvas,
-        (
-            partial_timing_marks.bottom_left_corner.x,
-            partial_timing_marks.bottom_left_corner.y,
-        ),
-        (
-            partial_timing_marks.bottom_right_corner.x,
-            partial_timing_marks.bottom_right_corner.y,
-        ),
-        Rgb([0, 0, 255]),
-    );
-
-    draw_line_segment_mut(
-        canvas,
-        (
-            partial_timing_marks.top_left_corner.x,
-            partial_timing_marks.top_left_corner.y,
-        ),
-        (
-            partial_timing_marks.bottom_left_corner.x,
-            partial_timing_marks.bottom_left_corner.y,
-        ),
-        Rgb([255, 0, 0]),
-    );
-
-    draw_line_segment_mut(
-        canvas,
-        (
-            partial_timing_marks.top_right_corner.x,
-            partial_timing_marks.top_right_corner.y,
-        ),
-        (
-            partial_timing_marks.bottom_right_corner.x,
-            partial_timing_marks.bottom_right_corner.y,
-        ),
-        Rgb([0, 255, 255]),
-    );
-
-    for rect in &partial_timing_marks.top_rects {
-        draw_filled_rect_mut(canvas, *rect, Rgb([0, 255, 0]));
-    }
-    for rect in &partial_timing_marks.bottom_rects {
-        draw_filled_rect_mut(canvas, *rect, Rgb([0, 0, 255]));
-    }
-    for rect in &partial_timing_marks.left_rects {
-        draw_filled_rect_mut(canvas, *rect, Rgb([255, 0, 0]));
-    }
-    for rect in &partial_timing_marks.right_rects {
-        draw_filled_rect_mut(canvas, *rect, Rgb([0, 255, 255]));
-    }
-
-    if let Some(top_left_corner) = partial_timing_marks.top_left_rect {
-        draw_filled_rect_mut(canvas, top_left_corner, Rgb([255, 0, 255]));
-    }
-
-    if let Some(top_right_corner) = partial_timing_marks.top_right_rect {
-        draw_filled_rect_mut(canvas, top_right_corner, Rgb([255, 0, 255]));
-    }
-
-    if let Some(bottom_left_corner) = partial_timing_marks.bottom_left_rect {
-        draw_filled_rect_mut(canvas, bottom_left_corner, Rgb([255, 0, 255]));
-    }
-
-    if let Some(bottom_right_corner) = partial_timing_marks.bottom_right_rect {
-        draw_filled_rect_mut(canvas, bottom_right_corner, Rgb([255, 0, 255]));
-    }
-
-    draw_cross_mut(
-        canvas,
-        Rgb([255, 255, 255]),
-        partial_timing_marks.top_left_corner.x.round() as i32,
-        partial_timing_marks.top_left_corner.y.round() as i32,
-    );
-
-    draw_cross_mut(
-        canvas,
-        Rgb([255, 255, 255]),
-        partial_timing_marks.top_right_corner.x.round() as i32,
-        partial_timing_marks.top_right_corner.y.round() as i32,
-    );
-
-    draw_cross_mut(
-        canvas,
-        Rgb([255, 255, 255]),
-        partial_timing_marks.bottom_left_corner.x.round() as i32,
-        partial_timing_marks.bottom_left_corner.y.round() as i32,
-    );
-
-    draw_cross_mut(
-        canvas,
-        Rgb([255, 255, 255]),
-        partial_timing_marks.bottom_right_corner.x.round() as i32,
-        partial_timing_marks.bottom_right_corner.y.round() as i32,
-    );
-
-    let top_line_distance = Segment::new(
-        partial_timing_marks.top_left_corner,
-        partial_timing_marks.top_right_corner,
-    )
-    .length();
-    let _top_line_distance_per_segment =
-        top_line_distance / ((geometry.grid_size.width - 1) as f32);
-    let bottom_line_distance = Segment::new(
-        partial_timing_marks.bottom_left_corner,
-        partial_timing_marks.bottom_right_corner,
-    )
-    .length();
-    let _bottom_line_distance_per_segment =
-        bottom_line_distance / ((geometry.grid_size.width - 1) as f32);
-    for i in 0..geometry.grid_size.width {
-        let expected_top_timing_mark_center = segment_with_length(
-            &Segment::new(
-                partial_timing_marks.top_left_corner,
-                partial_timing_marks.top_right_corner,
-            ),
-            top_line_distance * (i as f32),
-        )
-        .end;
-
-        draw_cross_mut(
-            canvas,
-            Rgb([0, 127, 0]),
-            expected_top_timing_mark_center.x.round() as i32,
-            expected_top_timing_mark_center.y.round() as i32,
-        );
-
-        let expected_bottom_timing_mark_center = segment_with_length(
-            &Segment::new(
-                partial_timing_marks.bottom_left_corner,
-                partial_timing_marks.bottom_right_corner,
-            ),
-            bottom_line_distance * (i as f32),
-        )
-        .end;
-
-        draw_cross_mut(
-            canvas,
-            Rgb([0, 0, 127]),
-            expected_bottom_timing_mark_center.x.round() as i32,
-            expected_bottom_timing_mark_center.y.round() as i32,
-        );
-    }
-
-    let left_line_distance = Segment::new(
-        partial_timing_marks.top_left_corner,
-        partial_timing_marks.bottom_left_corner,
-    )
-    .length();
-    let left_line_distance_per_segment =
-        left_line_distance / ((geometry.grid_size.height - 1) as f32);
-    let right_line_distance = Segment::new(
-        partial_timing_marks.top_right_corner,
-        partial_timing_marks.bottom_right_corner,
-    )
-    .length();
-    let right_line_distance_per_segment =
-        right_line_distance / ((geometry.grid_size.height - 1) as f32);
-    for i in 0..geometry.grid_size.height {
-        let expected_left_timing_mark_center = segment_with_length(
-            &Segment::new(
-                partial_timing_marks.top_left_corner,
-                partial_timing_marks.bottom_left_corner,
-            ),
-            left_line_distance_per_segment * (i as f32),
-        )
-        .end;
-
-        draw_cross_mut(
-            canvas,
-            Rgb([127, 0, 0]),
-            expected_left_timing_mark_center.x.round() as i32,
-            expected_left_timing_mark_center.y.round() as i32,
-        );
-
-        let expected_right_timing_mark_center = segment_with_length(
-            &Segment::new(
-                partial_timing_marks.top_right_corner,
-                partial_timing_marks.bottom_right_corner,
-            ),
-            right_line_distance_per_segment * (i as f32),
-        )
-        .end;
-
-        draw_cross_mut(
-            canvas,
-            Rgb([0, 127, 127]),
-            expected_right_timing_mark_center.x.round() as i32,
-            expected_right_timing_mark_center.y.round() as i32,
-        );
-    }
-}
-
-fn draw_timing_mark_grid_debug_image_mut(
-    canvas: &mut RgbImage,
-    timing_mark_grid: &TimingMarkGrid,
-    geometry: &BallotCardGeometry,
-) {
-    for x in 0..geometry.grid_size.width {
-        for y in 0..geometry.grid_size.height {
-            let point = timing_mark_grid.get(x, y).expect("grid point is defined");
-            draw_cross_mut(
-                canvas,
-                Rgb([255, 0, 255]),
-                point.x.round() as i32,
-                point.y.round() as i32,
-            );
-        }
-    }
-}
-
 fn main() {
     pretty_env_logger::init_custom_env("LOG");
 
     let matches = cli().get_matches();
     let debug = matches.get_flag("debug");
-    let images: Vec<&String> = matches
-        .get_many::<String>("image")
-        .unwrap_or_default()
-        .collect();
+    let side_a_path = matches
+        .get_one::<String>("side_a_path")
+        .expect("side A image path");
+    let side_b_path = matches
+        .get_one::<String>("side_b_path")
+        .expect("side B image path");
+    let election_definition_path = matches
+        .get_one::<String>("election")
+        .expect("election path");
+
+    // parse contents of election_definition_path with serde_json
+    let election: Election = match serde_json::from_str(
+        &std::fs::read_to_string(election_definition_path).expect("election file"),
+    ) {
+        Ok(election_definition) => election_definition,
+        Err(e) => {
+            panic!("Error parsing election definition: {}", e);
+        }
+    };
+
+    println!("Election: {:?}", election);
 
     let oval_scan_image = match load_oval_scan_image() {
         Some(image) => image,
@@ -616,14 +362,43 @@ fn main() {
     let options = ProcessImageOptions {
         debug,
         oval_template: oval_scan_image,
+        election,
+        side: BallotSide::Front,
     };
     let timer = timer!("total");
-    images.par_iter().for_each(
-        |image_path| match process_image(Path::new(image_path), &options) {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Error processing image {}: {:?}", image_path, e);
-            }
+
+    rayon::join(
+        || {
+            let timer = timer!("side A");
+            match process_image(
+                Path::new(&side_a_path),
+                &ProcessImageOptions {
+                    side: BallotSide::Front,
+                    ..options.clone()
+                },
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Error processing image {}: {:?}", side_a_path, e);
+                }
+            };
+            finish!(timer);
+        },
+        || {
+            let timer = timer!("side B");
+            match process_image(
+                Path::new(&side_b_path),
+                &ProcessImageOptions {
+                    side: BallotSide::Back,
+                    ..options.clone()
+                },
+            ) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Error processing image {}: {:?}", side_b_path, e);
+                }
+            };
+            finish!(timer);
         },
     );
     finish!(timer);
@@ -631,6 +406,8 @@ fn main() {
 
 fn cli() -> Command {
     command!()
+        .arg(arg!(-e --election <PATH> "Path to election.json file").required(true))
         .arg(arg!(-d --debug "Enable debug mode"))
-        .arg(arg!([image]... "Images to process"))
+        .arg(arg!(side_a_path: <SIDE_A_IMAGE> "Path to image for side A").required(true))
+        .arg(arg!(side_b_path: <SIDE_B_IMAGE> "Path to image for side B").required(true))
 }

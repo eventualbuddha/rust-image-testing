@@ -14,15 +14,16 @@ use imageproc::{
 use logging_timer::time;
 
 use crate::{
+    election::{GridLayout, GridLocation, GridPosition},
     geometry::{center_of_rect, find_best_line_through_items, intersection_of_lines, Segment},
     get_contour_bounding_rect,
     image_utils::{bleed, diff, ratio, BLACK, WHITE},
     is_contour_rectangular,
-    types::BallotCardGeometry,
+    types::{BallotCardGeometry, BallotSide},
 };
 
 /// Represents partial timing marks found in a ballot card.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PartialTimingMarks {
     pub geometry: BallotCardGeometry,
     pub top_left_corner: Point<f32>,
@@ -39,7 +40,27 @@ pub struct PartialTimingMarks {
     pub bottom_right_rect: Option<Rect>,
 }
 
-#[derive(Debug)]
+impl From<CompleteTimingMarks> for PartialTimingMarks {
+    fn from(complete_timing_marks: CompleteTimingMarks) -> Self {
+        Self {
+            geometry: complete_timing_marks.geometry,
+            top_left_corner: complete_timing_marks.top_left_corner,
+            top_right_corner: complete_timing_marks.top_right_corner,
+            bottom_left_corner: complete_timing_marks.bottom_left_corner,
+            bottom_right_corner: complete_timing_marks.bottom_right_corner,
+            top_rects: complete_timing_marks.top_rects,
+            bottom_rects: complete_timing_marks.bottom_rects,
+            left_rects: complete_timing_marks.left_rects,
+            right_rects: complete_timing_marks.right_rects,
+            top_left_rect: Some(complete_timing_marks.top_left_rect),
+            top_right_rect: Some(complete_timing_marks.top_right_rect),
+            bottom_left_rect: Some(complete_timing_marks.bottom_left_rect),
+            bottom_right_rect: Some(complete_timing_marks.bottom_right_rect),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CompleteTimingMarks {
     pub geometry: BallotCardGeometry,
     pub top_left_corner: Point<f32>,
@@ -81,17 +102,20 @@ impl TimingMarkGrid {
     ///   - (33, 0) is the top right corner of the grid
     ///   - (0, 50) is the bottom left corner of the grid
     ///   - (33, 50) is the bottom right corner of the grid
-    ///   - (x, y) where 0 < x < 33 and 0 < y < 50 is the oval at column x and
-    ///     row y
-    pub fn get(&self, x: u32, y: u32) -> Option<Point<f32>> {
-        if x >= self.geometry.grid_size.width || y >= self.geometry.grid_size.height {
+    ///   - (c, r) where 0 < c < 33 and 0 < r < 50 is the oval at column c and
+    ///     row r
+    pub fn get(&self, column: u32, row: u32) -> Option<Point<f32>> {
+        if column >= self.geometry.grid_size.width || row >= self.geometry.grid_size.height {
             return None;
         }
 
-        let left = self.complete_timing_marks.left_rects.get(y as usize)?;
-        let right = self.complete_timing_marks.right_rects.get(y as usize)?;
-        let top = self.complete_timing_marks.top_rects.get(x as usize)?;
-        let bottom = self.complete_timing_marks.bottom_rects.get(x as usize)?;
+        let left = self.complete_timing_marks.left_rects.get(row as usize)?;
+        let right = self.complete_timing_marks.right_rects.get(row as usize)?;
+        let top = self.complete_timing_marks.top_rects.get(column as usize)?;
+        let bottom = self
+            .complete_timing_marks
+            .bottom_rects
+            .get(column as usize)?;
         let horizontal_segment = Segment::new(center_of_rect(left), center_of_rect(right));
         let vertical_segment = Segment::new(center_of_rect(top), center_of_rect(bottom));
 
@@ -557,15 +581,14 @@ impl PartialOrd for OvalMarkScore {
     }
 }
 
-pub type OvalMarkLocation = Point<u32>;
-
 pub struct ScoredOvalMark {
-    pub location: OvalMarkLocation,
+    pub location: GridLocation,
     pub match_score: OvalMarkScore,
     pub fill_score: OvalMarkScore,
-    pub bounds: Rect,
-    pub cropped_image: GrayImage,
-    pub cropped_thresholded_image: GrayImage,
+    pub original_bounds: Rect,
+    pub matched_bounds: Rect,
+    pub source_image: GrayImage,
+    pub binarized_source_image: GrayImage,
     pub match_diff_image: GrayImage,
     pub fill_diff_image: GrayImage,
 }
@@ -574,25 +597,69 @@ impl std::fmt::Debug for ScoredOvalMark {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "ScoredOvalMark {{ location: {:?}, match_score: {}, fill_score: {}, bounds: {:?} }}",
-            self.location, self.match_score, self.fill_score, self.bounds
+            "ScoredOvalMark {{ location: {:?}, match_score: {}, fill_score: {}, matched_bounds: {:?} }}",
+            self.location, self.match_score, self.fill_score, self.matched_bounds
         )
     }
 }
 
-pub fn score_oval_mark(
+pub const DEFAULT_MAXIMUM_SEARCH_DISTANCE: u32 = 7;
+
+#[time]
+pub fn score_oval_marks_from_grid_layout(
     img: &GrayImage,
     oval_template: &GrayImage,
     timing_mark_grid: &TimingMarkGrid,
-    location: &OvalMarkLocation,
+    grid_layout: &GridLayout,
+    side: BallotSide,
+) -> Vec<(GridPosition, Option<ScoredOvalMark>)> {
+    let threshold = otsu_level(&img);
+    let mut scored_ovals = vec![];
+
+    for grid_position in &grid_layout.grid_positions {
+        let location = grid_position.location();
+
+        if location.side != side {
+            continue;
+        }
+
+        match timing_mark_grid.get(location.column, location.row) {
+            Some(expected_oval_center) => {
+                scored_ovals.push((
+                    grid_position.clone(),
+                    score_oval_mark(
+                        img,
+                        oval_template,
+                        &expected_oval_center,
+                        &location,
+                        DEFAULT_MAXIMUM_SEARCH_DISTANCE,
+                        threshold,
+                    ),
+                ));
+            }
+            None => scored_ovals.push((grid_position.clone(), None)),
+        }
+    }
+
+    scored_ovals
+}
+
+/// Scores an oval mark within a scanned ballot image.
+pub fn score_oval_mark(
+    img: &GrayImage,
+    oval_template: &GrayImage,
+    expected_oval_center: &Point<f32>,
+    location: &GridLocation,
     maximum_search_distance: u32,
     threshold: u8,
 ) -> Option<ScoredOvalMark> {
-    let center = timing_mark_grid.get(location.x, location.y)?;
-    let center_x = center.x.round() as u32;
-    let center_y = center.y.round() as u32;
+    let center_x = expected_oval_center.x.round() as u32;
+    let center_y = expected_oval_center.y.round() as u32;
     let left = center_x - oval_template.width() / 2;
     let top = center_y - oval_template.height() / 2;
+    let width = oval_template.width();
+    let height = oval_template.height();
+    let original_bounds = Rect::at(left as i32, top as i32).of_size(width, height);
     let mut best_match_score = OvalMarkScore(f32::NEG_INFINITY);
     let mut best_match_bounds: Option<Rect> = None;
     let mut best_match_diff: Option<GrayImage> = None;
@@ -609,14 +676,7 @@ pub fn score_oval_mark(
                 continue;
             }
 
-            let cropped = img
-                .view(
-                    x as u32,
-                    y as u32,
-                    oval_template.width(),
-                    oval_template.height(),
-                )
-                .to_image();
+            let cropped = img.view(x as u32, y as u32, width, height).to_image();
             let cropped_and_thresholded = imageproc::contrast::threshold(&cropped, threshold);
 
             let match_diff = diff(&cropped_and_thresholded, &oval_template);
@@ -624,8 +684,7 @@ pub fn score_oval_mark(
 
             if match_score > best_match_score {
                 best_match_score = match_score;
-                best_match_bounds =
-                    Some(Rect::at(x, y).of_size(oval_template.width(), oval_template.height()));
+                best_match_bounds = Some(Rect::at(x, y).of_size(width, oval_template.height()));
                 best_match_diff = Some(match_diff);
             }
         }
@@ -634,7 +693,7 @@ pub fn score_oval_mark(
     let best_match_bounds = best_match_bounds?;
     let best_match_diff = best_match_diff?;
 
-    let cropped = img
+    let source_image = img
         .view(
             best_match_bounds.left() as u32,
             best_match_bounds.top() as u32,
@@ -642,17 +701,18 @@ pub fn score_oval_mark(
             best_match_bounds.height(),
         )
         .to_image();
-    let cropped_and_thresholded = imageproc::contrast::threshold(&cropped, threshold);
-    let diff_image = diff(&oval_template, &cropped_and_thresholded);
+    let binarized_source_image = imageproc::contrast::threshold(&source_image, threshold);
+    let diff_image = diff(&oval_template, &binarized_source_image);
     let fill_score = OvalMarkScore(ratio(&diff_image, &BLACK));
 
     Some(ScoredOvalMark {
         location: *location,
         match_score: best_match_score,
         fill_score,
-        bounds: best_match_bounds,
-        cropped_image: cropped,
-        cropped_thresholded_image: cropped_and_thresholded,
+        original_bounds,
+        matched_bounds: best_match_bounds,
+        source_image,
+        binarized_source_image,
         match_diff_image: best_match_diff,
         fill_diff_image: diff_image,
     })

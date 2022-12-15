@@ -24,3 +24,19 @@ pub struct BallotCardGeometry {
     pub front_usable_area: Rect,
     pub back_usable_area: Rect,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BallotSide {
+    Front,
+    Back,
+}
+
+impl From<&str> for BallotSide {
+    fn from(s: &str) -> Self {
+        match s {
+            "front" => BallotSide::Front,
+            "back" => BallotSide::Back,
+            _ => panic!("Invalid ballot side: {}", s),
+        }
+    }
+}
