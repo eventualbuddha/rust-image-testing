@@ -1,35 +1,4 @@
-use imageproc::rect::Rect;
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum BallotPaperSize {
-    Letter,
-    Legal,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Size<T> {
-    pub width: T,
-    pub height: T,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct BallotCardGeometry {
-    pub ballot_paper_size: BallotPaperSize,
-    pub pixels_per_inch: u32,
-    pub canvas_size: Size<u32>,
-    pub content_area: Rect,
-    pub oval_size: Size<u32>,
-    pub timing_mark_size: Size<f32>,
-    pub grid_size: Size<u32>,
-    pub front_usable_area: Rect,
-    pub back_usable_area: Rect,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BallotSide {
-    Front,
-    Back,
-}
+use serde::{Deserialize, Serialize};
 
 impl From<&str> for BallotSide {
     fn from(s: &str) -> Self {
@@ -40,3 +9,50 @@ impl From<&str> for BallotSide {
         }
     }
 }
+
+impl<'de> Deserialize<'de> for BallotSide {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(s.as_str().into())
+    }
+}
+
+impl Serialize for BallotSide {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            BallotSide::Front => serializer.serialize_str("front"),
+            BallotSide::Back => serializer.serialize_str("back"),
+        }
+    }
+}
+
+// Defines a new type that wraps a String for use as an ID.
+macro_rules! idtype {
+    ($name:ident) => {
+        #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        pub struct $name(String);
+
+        impl $name {
+            #[allow(dead_code)]
+            pub fn from(s: String) -> Self {
+                Self(s)
+            }
+        }
+
+        impl Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+    };
+}
+
+pub(crate) use idtype;
+
+use crate::ballot_card::BallotSide;

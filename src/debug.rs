@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use image::{RgbImage, Rgb};
+use image::{DynamicImage, GrayImage, Rgb, RgbImage};
 use imageproc::{
     drawing::{
         draw_cross_mut, draw_filled_rect_mut, draw_hollow_rect_mut, draw_line_segment_mut,
@@ -14,11 +14,10 @@ use crate::{
     election::GridPosition,
     geometry::{segment_with_length, Segment},
     image_utils::{
-        BLUE, CYAN, DARK_BLUE, DARK_CYAN, DARK_GREEN, DARK_RED, GREEN, PINK, RAINBOW,
-        RED, WHITE_RGB,
+        BLUE, CYAN, DARK_BLUE, DARK_CYAN, DARK_GREEN, DARK_RED, GREEN, PINK, RAINBOW, RED,
+        WHITE_RGB,
     },
-    timing_marks::{PartialTimingMarks, ScoredOvalMark, TimingMarkGrid},
-    types::BallotCardGeometry,
+    timing_marks::{PartialTimingMarks, ScoredOvalMark, TimingMarkGrid}, ballot_card::BallotCardGeometry,
 };
 
 /// Creates a path for a debug image.
@@ -372,4 +371,36 @@ fn draw_text_with_background_mut(
         background_color,
     );
     draw_text_mut(canvas, text_color, x, y, scale, font, text);
+}
+
+#[derive(Debug)]
+pub struct ImageDebugWriter {
+    input_path: PathBuf,
+    input_image: Option<GrayImage>,
+}
+
+impl ImageDebugWriter {
+    pub fn new(input_path: PathBuf, input_image: GrayImage) -> Self {
+        Self {
+            input_path,
+            input_image: Some(input_image),
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            input_path: PathBuf::new(),
+            input_image: None,
+        }
+    }
+
+    pub fn write(&self, label: &str, draw: impl FnOnce(&mut RgbImage)) {
+        if let Some(input_image) = &self.input_image {
+            let mut output_image = DynamicImage::ImageLuma8(input_image.clone()).into_rgb8();
+            draw(&mut output_image);
+
+            let output_path = debug_image_path(&self.input_path, label);
+            output_image.save(output_path).expect("image is saved");
+        }
+    }
 }

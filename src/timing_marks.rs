@@ -1,25 +1,27 @@
 use std::{
     f32::consts::PI,
     fmt::{Display, Formatter},
-    io,
+    path::Path,
 };
 
-use image::{GenericImageView, GrayImage, Luma};
+use image::{GenericImageView, GrayImage};
 use imageproc::{
-    contours::{find_contours_with_threshold, BorderType},
-    contrast::{otsu_level, threshold},
+    contours::{find_contours_with_threshold, BorderType, Contour},
+    contrast::otsu_level,
     point::Point,
     rect::Rect,
 };
 use logging_timer::time;
 
 use crate::{
+    ballot_card::{BallotCardGeometry, BallotSide},
+    debug,
+    debug::ImageDebugWriter,
     election::{GridLayout, GridLocation, GridPosition},
     geometry::{center_of_rect, find_best_line_through_items, intersection_of_lines, Segment},
-    get_contour_bounding_rect,
-    image_utils::{bleed, diff, ratio, BLACK, WHITE},
-    is_contour_rectangular,
-    types::{BallotCardGeometry, BallotSide},
+    image_utils::{diff, ratio, BLACK, WHITE},
+    interpret::InterpretBallotCardError,
+    metadata::{decode_metadata_from_timing_marks, BallotCardMetadata},
 };
 
 /// Represents partial timing marks found in a ballot card.
@@ -79,16 +81,38 @@ pub struct CompleteTimingMarks {
 
 /// Represents a grid of timing marks and provides access to the location of
 /// ovals in the grid.
+#[derive(Debug)]
 pub struct TimingMarkGrid {
-    geometry: BallotCardGeometry,
-    complete_timing_marks: CompleteTimingMarks,
+    /// The geometry of the ballot card.
+    pub geometry: BallotCardGeometry,
+
+    /// Timing marks found by examining the image.
+    pub partial_timing_marks: PartialTimingMarks,
+
+    /// Timing marks inferred from the partial timing marks.
+    pub complete_timing_marks: CompleteTimingMarks,
+
+    /// Areas of the ballot card that contain shapes that may be timing marks.
+    pub candidate_timing_marks: Vec<Rect>,
+
+    /// Metadata from the ballot card bottom timing marks.
+    pub metadata: BallotCardMetadata,
 }
 
 impl TimingMarkGrid {
-    pub fn new(geometry: BallotCardGeometry, complete_timing_marks: CompleteTimingMarks) -> Self {
+    pub fn new(
+        geometry: BallotCardGeometry,
+        partial_timing_marks: PartialTimingMarks,
+        complete_timing_marks: CompleteTimingMarks,
+        candidate_timing_marks: Vec<Rect>,
+        metadata: BallotCardMetadata,
+    ) -> Self {
         Self {
             geometry,
+            partial_timing_marks,
             complete_timing_marks,
+            candidate_timing_marks,
+            metadata,
         }
     }
 
@@ -124,10 +148,105 @@ impl TimingMarkGrid {
 }
 
 #[time]
-pub fn find_timing_mark_shapes(geometry: &BallotCardGeometry, img: &GrayImage) -> Vec<Rect> {
+pub fn find_timing_mark_grid(
+    image_path: &Path,
+    geometry: &BallotCardGeometry,
+    img: &GrayImage,
+    debug: &ImageDebugWriter,
+) -> Result<TimingMarkGrid, InterpretBallotCardError> {
+    let candidate_timing_marks = find_timing_mark_shapes(&geometry, &img, &debug);
+
+    let partial_timing_marks = match find_partial_timing_marks_from_candidate_rects(
+        &geometry,
+        &candidate_timing_marks,
+        &debug,
+    ) {
+        Some(partial_timing_marks) => partial_timing_marks,
+        None => {
+            return Err(InterpretBallotCardError::MissingTimingMarks(
+                candidate_timing_marks,
+            ))
+        }
+    };
+
+    let complete_timing_marks = match find_complete_timing_marks_from_partial_timing_marks(
+        &geometry,
+        &partial_timing_marks,
+        &debug,
+    ) {
+        Some(complete_timing_marks) => complete_timing_marks,
+        None => {
+            return Err(InterpretBallotCardError::MissingTimingMarks(
+                candidate_timing_marks,
+            ))
+        }
+    };
+
+    let metadata =
+        match decode_metadata_from_timing_marks(&partial_timing_marks, &complete_timing_marks) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                return Err(InterpretBallotCardError::MetadataError(
+                    image_path.to_path_buf(),
+                    err,
+                ))
+            }
+        };
+
+    let timing_mark_grid = TimingMarkGrid::new(
+        geometry.clone(),
+        partial_timing_marks,
+        complete_timing_marks,
+        candidate_timing_marks,
+        metadata,
+    );
+
+    debug.write("timing_mark_grid", |canvas| {
+        debug::draw_timing_mark_grid_debug_image_mut(canvas, &timing_mark_grid, &geometry);
+    });
+
+    Ok(timing_mark_grid)
+}
+
+fn is_contour_rectangular(contour: &Contour<u32>) -> bool {
+    let rect = get_contour_bounding_rect(contour);
+
+    let error_value = contour
+        .points
+        .iter()
+        .map(|p| {
+            [
+                (p.x - rect.left() as u32),
+                (p.y - rect.top() as u32),
+                (rect.right() as u32 - p.x),
+                (rect.bottom() as u32 - p.y),
+            ]
+            .into_iter()
+            .min()
+            .unwrap_or(0)
+        })
+        .sum::<u32>();
+    let rectangular_score = error_value as f32 / contour.points.len() as f32;
+    rectangular_score < 1.0
+}
+
+fn get_contour_bounding_rect(contour: &Contour<u32>) -> Rect {
+    let min_x = contour.points.iter().map(|p| p.x).min().unwrap_or(0);
+    let max_x = contour.points.iter().map(|p| p.x).max().unwrap_or(0);
+    let min_y = contour.points.iter().map(|p| p.y).min().unwrap_or(0);
+    let max_y = contour.points.iter().map(|p| p.y).max().unwrap_or(0);
+    Rect::at(min_x as i32, min_y as i32).of_size(max_x - min_x + 1, max_y - min_y + 1)
+}
+
+#[time]
+pub fn find_timing_mark_shapes(
+    geometry: &BallotCardGeometry,
+    img: &GrayImage,
+    debug: &ImageDebugWriter,
+) -> Vec<Rect> {
     let threshold = otsu_level(img);
     let contours = find_contours_with_threshold(img, threshold);
-    let contour_rects = contours
+    let candidate_timing_marks = contours
         .iter()
         .enumerate()
         .filter_map(|(i, contour)| {
@@ -144,13 +263,18 @@ pub fn find_timing_mark_shapes(geometry: &BallotCardGeometry, img: &GrayImage) -
         })
         .collect::<Vec<Rect>>();
 
-    contour_rects
+    debug.write("candidate_timing_marks", |canvas| {
+        debug::draw_contour_rects_debug_image_mut(canvas, &candidate_timing_marks);
+    });
+
+    candidate_timing_marks
 }
 
 #[time]
 pub fn find_partial_timing_marks_from_candidate_rects(
     geometry: &BallotCardGeometry,
     rects: &[Rect],
+    debug: &ImageDebugWriter,
 ) -> Option<PartialTimingMarks> {
     let half_height = (geometry.canvas_size.height / 2) as i32;
     let top_half_rects = rects
@@ -188,56 +312,15 @@ pub fn find_partial_timing_marks_from_candidate_rects(
 
     let top_start_rect_center = center_of_rect(top_line.first().unwrap());
     let top_last_rect_center = center_of_rect(top_line.last().unwrap());
-    // draw_line_segment_mut(
-    //     &mut find_best_fit_line_debug_image,
-    //     (top_start_rect_center.x, top_start_rect_center.y),
-    //     (top_last_rect_center.x, top_last_rect_center.y),
-    //     Rgb([0, 255, 0]),
-    // );
 
     let bottom_start_rect_center = center_of_rect(bottom_line.first().unwrap());
     let bottom_last_rect_center = center_of_rect(bottom_line.last().unwrap());
-    // draw_line_segment_mut(
-    //     &mut find_best_fit_line_debug_image,
-    //     (bottom_start_rect_center.x, bottom_start_rect_center.y),
-    //     (bottom_last_rect_center.x, bottom_last_rect_center.y),
-    //     Rgb([0, 0, 255]),
-    // );
 
     let left_start_rect_center = center_of_rect(left_line.first().unwrap());
     let left_last_rect_center = center_of_rect(left_line.last().unwrap());
-    // draw_line_segment_mut(
-    //     &mut find_best_fit_line_debug_image,
-    //     (left_start_rect_center.x, left_start_rect_center.y),
-    //     (left_last_rect_center.x, left_last_rect_center.y),
-    //     Rgb([255, 0, 0]),
-    // );
 
     let right_start_rect_center = center_of_rect(right_line.first().unwrap());
     let right_last_rect_center = center_of_rect(right_line.last().unwrap());
-    // draw_line_segment_mut(
-    //     &mut find_best_fit_line_debug_image,
-    //     (right_start_rect_center.x, right_start_rect_center.y),
-    //     (right_last_rect_center.x, right_last_rect_center.y),
-    //     Rgb([0, 255, 255]),
-    // );
-
-    // for rect in &top_line {
-    //     draw_filled_rect_mut(&mut find_best_fit_line_debug_image, *rect, Rgb([0, 255, 0]));
-    // }
-    // for rect in &bottom_line {
-    //     draw_filled_rect_mut(&mut find_best_fit_line_debug_image, *rect, Rgb([0, 0, 255]));
-    // }
-    // for rect in &left_line {
-    //     draw_filled_rect_mut(&mut find_best_fit_line_debug_image, *rect, Rgb([255, 0, 0]));
-    // }
-    // for rect in &right_line {
-    //     draw_filled_rect_mut(
-    //         &mut find_best_fit_line_debug_image,
-    //         *rect,
-    //         Rgb([0, 255, 255]),
-    //     );
-    // }
 
     let top_left_corner = if top_line.first() == left_line.first() {
         top_line.first()
@@ -260,50 +343,12 @@ pub fn find_partial_timing_marks_from_candidate_rects(
         None
     };
 
-    // if let Some(top_left_corner) = top_left_corner {
-    //     draw_filled_rect_mut(
-    //         &mut find_best_fit_line_debug_image,
-    //         *top_left_corner,
-    //         Rgb([255, 0, 255]),
-    //     );
-    // }
-
-    // if let Some(top_right_corner) = top_right_corner {
-    //     draw_filled_rect_mut(
-    //         &mut find_best_fit_line_debug_image,
-    //         *top_right_corner,
-    //         Rgb([255, 0, 255]),
-    //     );
-    // }
-
-    // if let Some(bottom_left_corner) = bottom_left_corner {
-    //     draw_filled_rect_mut(
-    //         &mut find_best_fit_line_debug_image,
-    //         *bottom_left_corner,
-    //         Rgb([255, 0, 255]),
-    //     );
-    // }
-
-    // if let Some(bottom_right_corner) = bottom_right_corner {
-    //     draw_filled_rect_mut(
-    //         &mut find_best_fit_line_debug_image,
-    //         *bottom_right_corner,
-    //         Rgb([255, 0, 255]),
-    //     );
-    // }
-
     let top_left_intersection = intersection_of_lines(
         &Segment::new(top_start_rect_center, top_last_rect_center),
         &Segment::new(left_start_rect_center, left_last_rect_center),
         false,
     )
     .unwrap();
-    // draw_cross_mut(
-    //     &mut find_best_fit_line_debug_image,
-    //     Rgb([255, 255, 255]),
-    //     top_left_intersection.x.round() as i32,
-    //     top_left_intersection.y.round() as i32,
-    // );
 
     let top_right_intersection = intersection_of_lines(
         &Segment::new(top_start_rect_center, top_last_rect_center),
@@ -311,12 +356,6 @@ pub fn find_partial_timing_marks_from_candidate_rects(
         false,
     )
     .unwrap();
-    // draw_cross_mut(
-    //     &mut find_best_fit_line_debug_image,
-    //     Rgb([255, 255, 255]),
-    //     top_right_intersection.x.round() as i32,
-    //     top_right_intersection.y.round() as i32,
-    // );
 
     let bottom_left_intersection = intersection_of_lines(
         &Segment::new(bottom_start_rect_center, bottom_last_rect_center),
@@ -324,12 +363,6 @@ pub fn find_partial_timing_marks_from_candidate_rects(
         false,
     )
     .unwrap();
-    // draw_cross_mut(
-    //     &mut find_best_fit_line_debug_image,
-    //     Rgb([255, 255, 255]),
-    //     bottom_left_intersection.x.round() as i32,
-    //     bottom_left_intersection.y.round() as i32,
-    // );
 
     let bottom_right_intersection = intersection_of_lines(
         &Segment::new(bottom_start_rect_center, bottom_last_rect_center),
@@ -338,7 +371,7 @@ pub fn find_partial_timing_marks_from_candidate_rects(
     )
     .unwrap();
 
-    Some(PartialTimingMarks {
+    let partial_timing_marks = PartialTimingMarks {
         geometry: *geometry,
         top_left_corner: top_left_intersection,
         top_right_corner: top_right_intersection,
@@ -352,13 +385,20 @@ pub fn find_partial_timing_marks_from_candidate_rects(
         bottom_rects: bottom_line,
         left_rects: left_line,
         right_rects: right_line,
-    })
+    };
+
+    debug.write("partial_timing_marks", |canvas| {
+        debug::draw_timing_mark_debug_image_mut(canvas, geometry, &partial_timing_marks)
+    });
+
+    Some(partial_timing_marks)
 }
 
 #[time]
 pub fn find_complete_timing_marks_from_partial_timing_marks(
-    partial_timing_marks: &PartialTimingMarks,
     geometry: &BallotCardGeometry,
+    partial_timing_marks: &PartialTimingMarks,
+    debug: &ImageDebugWriter,
 ) -> Option<CompleteTimingMarks> {
     let top_line = &partial_timing_marks.top_rects;
     let bottom_line = &partial_timing_marks.bottom_rects;
@@ -445,7 +485,7 @@ pub fn find_complete_timing_marks_from_partial_timing_marks(
         return None;
     }
 
-    Some(CompleteTimingMarks {
+    let complete_timing_marks = CompleteTimingMarks {
         geometry: *geometry,
         top_rects: top_line,
         bottom_rects: bottom_line,
@@ -459,7 +499,17 @@ pub fn find_complete_timing_marks_from_partial_timing_marks(
         top_right_rect: *top_right_rect,
         bottom_left_rect: *bottom_left_rect,
         bottom_right_rect: *bottom_right_rect,
-    })
+    };
+
+    debug.write("complete_timing_marks", |canvas| {
+        debug::draw_timing_mark_debug_image_mut(
+            canvas,
+            geometry,
+            &complete_timing_marks.clone().into(),
+        )
+    });
+
+    Some(complete_timing_marks)
 }
 
 /// Infers missing timing marks along a segment. It's expected that there are
@@ -542,19 +592,6 @@ pub fn distances_between_rects(rects: &[Rect]) -> Vec<f32> {
     distances
 }
 
-pub fn load_oval_scan_image() -> Option<GrayImage> {
-    let oval_scan_bytes = include_bytes!("../oval_scan.png");
-    let inner = io::Cursor::new(oval_scan_bytes);
-    let oval_scan_image = match image::load(inner, image::ImageFormat::Png).ok() {
-        Some(image) => image.to_luma8(),
-        _ => return None,
-    };
-    Some(bleed(
-        &threshold(&oval_scan_image, otsu_level(&oval_scan_image)),
-        &Luma([0u8]),
-    ))
-}
-
 pub struct OvalMarkScore(pub f32);
 
 impl Display for OvalMarkScore {
@@ -605,6 +642,8 @@ impl std::fmt::Debug for ScoredOvalMark {
 
 pub const DEFAULT_MAXIMUM_SEARCH_DISTANCE: u32 = 7;
 
+pub type ScoredOvalMarks = Vec<(GridPosition, Option<ScoredOvalMark>)>;
+
 #[time]
 pub fn score_oval_marks_from_grid_layout(
     img: &GrayImage,
@@ -612,7 +651,8 @@ pub fn score_oval_marks_from_grid_layout(
     timing_mark_grid: &TimingMarkGrid,
     grid_layout: &GridLayout,
     side: BallotSide,
-) -> Vec<(GridPosition, Option<ScoredOvalMark>)> {
+    debug: &ImageDebugWriter,
+) -> ScoredOvalMarks {
     let threshold = otsu_level(&img);
     let mut scored_ovals = vec![];
 
@@ -640,6 +680,10 @@ pub fn score_oval_marks_from_grid_layout(
             None => scored_ovals.push((grid_position.clone(), None)),
         }
     }
+
+    debug.write("scored_oval_marks", |canvas| {
+        debug::draw_scored_oval_marks_debug_image_mut(canvas, &scored_ovals)
+    });
 
     scored_ovals
 }

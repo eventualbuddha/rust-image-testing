@@ -1,4 +1,5 @@
-use image::{GrayImage, Luma, Rgb};
+use image::{GrayImage, Luma, Rgb, imageops::{resize, FilterType::Lanczos3}};
+use logging_timer::time;
 
 pub const WHITE: Luma<u8> = Luma([255]);
 pub const BLACK: Luma<u8> = Luma([0]);
@@ -16,15 +17,7 @@ pub const VIOLET: Rgb<u8> = Rgb([143, 0, 255]);
 pub const CYAN: Rgb<u8> = Rgb([0, 255, 255]);
 pub const DARK_CYAN: Rgb<u8> = Rgb([0, 127, 127]);
 pub const PINK: Rgb<u8> = Rgb([255, 0, 255]);
-pub const RAINBOW: [Rgb<u8>; 7] = [
-    RED,
-    ORANGE,
-    YELLOW,
-    GREEN,
-    BLUE,
-    INDIGO,
-    VIOLET,
-];
+pub const RAINBOW: [Rgb<u8>; 7] = [RED, ORANGE, YELLOW, GREEN, BLUE, INDIGO, VIOLET];
 
 /// Bleed the given luma value outwards from any pixels that match it.
 pub fn bleed(img: &GrayImage, luma: &Luma<u8>) -> GrayImage {
@@ -68,10 +61,7 @@ pub fn bleed(img: &GrayImage, luma: &Luma<u8>) -> GrayImage {
 /// └───────────────────┘  └───────────────────┘  └───────────────────┘
 /// ```
 ///
-pub fn diff(
-    base: &GrayImage,
-    compare: &GrayImage,
-) -> GrayImage {
+pub fn diff(base: &GrayImage, compare: &GrayImage) -> GrayImage {
     assert_eq!(base.dimensions(), compare.dimensions());
 
     let mut out = GrayImage::new(base.width(), base.height());
@@ -99,4 +89,22 @@ pub fn count_pixels(img: &GrayImage, luma: &Luma<u8>) -> u32 {
 pub fn ratio(img: &GrayImage, luma: &Luma<u8>) -> f32 {
     let total = img.width() * img.height();
     count_pixels(img, luma) as f32 / total as f32
+}
+
+/// Resizes an image to fit within the given dimensions while maintaining the
+/// aspect ratio.
+#[time]
+pub fn size_image_to_fit(img: &GrayImage, max_width: u32, max_height: u32) -> GrayImage {
+    let aspect_ratio = img.width() as f32 / img.height() as f32;
+    let new_width = if aspect_ratio > 1.0 {
+        max_width
+    } else {
+        (max_height as f32 * aspect_ratio).ceil() as u32
+    };
+    let new_height = if aspect_ratio > 1.0 {
+        (max_width as f32 / aspect_ratio).ceil() as u32
+    } else {
+        max_height
+    };
+    resize(img, new_width, new_height, Lanczos3)
 }
