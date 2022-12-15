@@ -14,6 +14,7 @@ use logging_timer::{finish, time, timer};
 use types::{BallotCardGeometry, BallotPaperSize, BallotSide, Size};
 
 use crate::election::Election;
+use crate::metadata::{decode_metadata_from_timing_marks};
 use crate::timing_marks::{
     find_complete_timing_marks_from_partial_timing_marks,
     find_partial_timing_marks_from_candidate_rects, find_timing_mark_shapes, load_oval_scan_image,
@@ -24,6 +25,7 @@ mod debug;
 mod election;
 mod geometry;
 mod image_utils;
+mod metadata;
 mod timing_marks;
 mod types;
 
@@ -270,6 +272,15 @@ fn process_image(
             complete_timing_marks
         }
     };
+
+    match decode_metadata_from_timing_marks(&partial_timing_marks, &complete_timing_marks) {
+        Ok(metadata) => {
+            eprintln!("Metadata: {:?}", metadata);
+        }
+        Err(err) => {
+            eprintln!("Metadata error: {:?}", err);
+        }
+    }
 
     let grid = TimingMarkGrid::new(geometry, complete_timing_marks);
 
