@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-impl From<&str> for BallotSide {
-    fn from(s: &str) -> Self {
+impl TryFrom<&str> for BallotSide {
+    type Error = ();
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
-            "front" => BallotSide::Front,
-            "back" => BallotSide::Back,
-            _ => panic!("Invalid ballot side: {}", s),
+            "front" => Ok(Self::Front),
+            "back" => Ok(Self::Back),
+            _ => Err(()),
         }
     }
 }
@@ -16,7 +18,9 @@ impl<'de> Deserialize<'de> for BallotSide {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        Ok(s.as_str().into())
+        s.as_str()
+            .try_into()
+            .map_err(|_| serde::de::Error::custom(format!("invalid value for BallotSide: {}", s)))
     }
 }
 
@@ -26,8 +30,8 @@ impl Serialize for BallotSide {
         S: serde::Serializer,
     {
         match self {
-            BallotSide::Front => serializer.serialize_str("front"),
-            BallotSide::Back => serializer.serialize_str("back"),
+            Self::Front => serializer.serialize_str("front"),
+            Self::Back => serializer.serialize_str("back"),
         }
     }
 }
@@ -40,7 +44,7 @@ macro_rules! idtype {
 
         impl $name {
             #[allow(dead_code)]
-            pub fn from(s: String) -> Self {
+            pub const fn from(s: String) -> Self {
                 Self(s)
             }
         }

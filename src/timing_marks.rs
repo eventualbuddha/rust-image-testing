@@ -14,20 +14,20 @@ use imageproc::{
 use logging_timer::time;
 
 use crate::{
-    ballot_card::{BallotCardGeometry, BallotSide},
+    ballot_card::{BallotSide, Geometry},
     debug,
     debug::ImageDebugWriter,
     election::{GridLayout, GridLocation, GridPosition},
     geometry::{center_of_rect, find_best_line_through_items, intersection_of_lines, Segment},
     image_utils::{diff, ratio, BLACK, WHITE},
-    interpret::InterpretBallotCardError,
+    interpret::Error,
     metadata::{decode_metadata_from_timing_marks, BallotCardMetadata},
 };
 
 /// Represents partial timing marks found in a ballot card.
 #[derive(Debug, Clone)]
-pub struct PartialTimingMarks {
-    pub geometry: BallotCardGeometry,
+pub struct Partial {
+    pub geometry: Geometry,
     pub top_left_corner: Point<f32>,
     pub top_right_corner: Point<f32>,
     pub bottom_left_corner: Point<f32>,
@@ -42,8 +42,8 @@ pub struct PartialTimingMarks {
     pub bottom_right_rect: Option<Rect>,
 }
 
-impl From<CompleteTimingMarks> for PartialTimingMarks {
-    fn from(complete_timing_marks: CompleteTimingMarks) -> Self {
+impl From<Complete> for Partial {
+    fn from(complete_timing_marks: Complete) -> Self {
         Self {
             geometry: complete_timing_marks.geometry,
             top_left_corner: complete_timing_marks.top_left_corner,
@@ -63,8 +63,8 @@ impl From<CompleteTimingMarks> for PartialTimingMarks {
 }
 
 #[derive(Debug, Clone)]
-pub struct CompleteTimingMarks {
-    pub geometry: BallotCardGeometry,
+pub struct Complete {
+    pub geometry: Geometry,
     pub top_left_corner: Point<f32>,
     pub top_right_corner: Point<f32>,
     pub bottom_left_corner: Point<f32>,
@@ -84,13 +84,13 @@ pub struct CompleteTimingMarks {
 #[derive(Debug)]
 pub struct TimingMarkGrid {
     /// The geometry of the ballot card.
-    pub geometry: BallotCardGeometry,
+    pub geometry: Geometry,
 
     /// Timing marks found by examining the image.
-    pub partial_timing_marks: PartialTimingMarks,
+    pub partial_timing_marks: Partial,
 
     /// Timing marks inferred from the partial timing marks.
-    pub complete_timing_marks: CompleteTimingMarks,
+    pub complete_timing_marks: Complete,
 
     /// Areas of the ballot card that contain shapes that may be timing marks.
     pub candidate_timing_marks: Vec<Rect>,
@@ -101,9 +101,9 @@ pub struct TimingMarkGrid {
 
 impl TimingMarkGrid {
     pub fn new(
-        geometry: BallotCardGeometry,
-        partial_timing_marks: PartialTimingMarks,
-        complete_timing_marks: CompleteTimingMarks,
+        geometry: Geometry,
+        partial_timing_marks: Partial,
+        complete_timing_marks: Complete,
         candidate_timing_marks: Vec<Rect>,
         metadata: BallotCardMetadata,
     ) -> Self {
@@ -150,51 +150,38 @@ impl TimingMarkGrid {
 #[time]
 pub fn find_timing_mark_grid(
     image_path: &Path,
-    geometry: &BallotCardGeometry,
+    geometry: &Geometry,
     img: &GrayImage,
     debug: &ImageDebugWriter,
-) -> Result<TimingMarkGrid, InterpretBallotCardError> {
-    let candidate_timing_marks = find_timing_mark_shapes(&geometry, &img, &debug);
+) -> Result<TimingMarkGrid, Error> {
+    let candidate_timing_marks = find_timing_mark_shapes(geometry, img, debug);
 
     let partial_timing_marks = match find_partial_timing_marks_from_candidate_rects(
-        &geometry,
+        geometry,
         &candidate_timing_marks,
-        &debug,
+        debug,
     ) {
         Some(partial_timing_marks) => partial_timing_marks,
-        None => {
-            return Err(InterpretBallotCardError::MissingTimingMarks(
-                candidate_timing_marks,
-            ))
-        }
+        None => return Err(Error::MissingTimingMarks(candidate_timing_marks)),
     };
 
     let complete_timing_marks = match find_complete_timing_marks_from_partial_timing_marks(
-        &geometry,
+        geometry,
         &partial_timing_marks,
-        &debug,
+        debug,
     ) {
         Some(complete_timing_marks) => complete_timing_marks,
-        None => {
-            return Err(InterpretBallotCardError::MissingTimingMarks(
-                candidate_timing_marks,
-            ))
-        }
+        None => return Err(Error::MissingTimingMarks(candidate_timing_marks)),
     };
 
     let metadata =
         match decode_metadata_from_timing_marks(&partial_timing_marks, &complete_timing_marks) {
             Ok(metadata) => metadata,
-            Err(err) => {
-                return Err(InterpretBallotCardError::MetadataError(
-                    image_path.to_path_buf(),
-                    err,
-                ))
-            }
+            Err(err) => return Err(Error::InvalidMetadata(image_path.to_path_buf(), err)),
         };
 
     let timing_mark_grid = TimingMarkGrid::new(
-        geometry.clone(),
+        *geometry,
         partial_timing_marks,
         complete_timing_marks,
         candidate_timing_marks,
@@ -202,7 +189,7 @@ pub fn find_timing_mark_grid(
     );
 
     debug.write("timing_mark_grid", |canvas| {
-        debug::draw_timing_mark_grid_debug_image_mut(canvas, &timing_mark_grid, &geometry);
+        debug::draw_timing_mark_grid_debug_image_mut(canvas, &timing_mark_grid, geometry);
     });
 
     Ok(timing_mark_grid)
@@ -240,7 +227,7 @@ fn get_contour_bounding_rect(contour: &Contour<u32>) -> Rect {
 
 #[time]
 pub fn find_timing_mark_shapes(
-    geometry: &BallotCardGeometry,
+    geometry: &Geometry,
     img: &GrayImage,
     debug: &ImageDebugWriter,
 ) -> Vec<Rect> {
@@ -272,10 +259,10 @@ pub fn find_timing_mark_shapes(
 
 #[time]
 pub fn find_partial_timing_marks_from_candidate_rects(
-    geometry: &BallotCardGeometry,
+    geometry: &Geometry,
     rects: &[Rect],
     debug: &ImageDebugWriter,
-) -> Option<PartialTimingMarks> {
+) -> Option<Partial> {
     let half_height = (geometry.canvas_size.height / 2) as i32;
     let top_half_rects = rects
         .iter()
@@ -305,22 +292,22 @@ pub fn find_partial_timing_marks_from_candidate_rects(
     let mut right_line =
         find_best_line_through_items(&right_half_rects, PI / 2.0, 5.0_f32.to_radians());
 
-    top_line.sort_by(|a, b| a.left().partial_cmp(&b.left()).unwrap());
-    bottom_line.sort_by(|a, b| a.left().partial_cmp(&b.left()).unwrap());
-    left_line.sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap());
-    right_line.sort_by(|a, b| a.top().partial_cmp(&b.top()).unwrap());
+    top_line.sort_by_key(Rect::left);
+    bottom_line.sort_by_key(Rect::left);
+    left_line.sort_by_key(Rect::top);
+    right_line.sort_by_key(Rect::top);
 
-    let top_start_rect_center = center_of_rect(top_line.first().unwrap());
-    let top_last_rect_center = center_of_rect(top_line.last().unwrap());
+    let top_start_rect_center = center_of_rect(top_line.first()?);
+    let top_last_rect_center = center_of_rect(top_line.last()?);
 
-    let bottom_start_rect_center = center_of_rect(bottom_line.first().unwrap());
-    let bottom_last_rect_center = center_of_rect(bottom_line.last().unwrap());
+    let bottom_start_rect_center = center_of_rect(bottom_line.first()?);
+    let bottom_last_rect_center = center_of_rect(bottom_line.last()?);
 
-    let left_start_rect_center = center_of_rect(left_line.first().unwrap());
-    let left_last_rect_center = center_of_rect(left_line.last().unwrap());
+    let left_start_rect_center = center_of_rect(left_line.first()?);
+    let left_last_rect_center = center_of_rect(left_line.last()?);
 
-    let right_start_rect_center = center_of_rect(right_line.first().unwrap());
-    let right_last_rect_center = center_of_rect(right_line.last().unwrap());
+    let right_start_rect_center = center_of_rect(right_line.first()?);
+    let right_last_rect_center = center_of_rect(right_line.last()?);
 
     let top_left_corner = if top_line.first() == left_line.first() {
         top_line.first()
@@ -347,31 +334,27 @@ pub fn find_partial_timing_marks_from_candidate_rects(
         &Segment::new(top_start_rect_center, top_last_rect_center),
         &Segment::new(left_start_rect_center, left_last_rect_center),
         false,
-    )
-    .unwrap();
+    )?;
 
     let top_right_intersection = intersection_of_lines(
         &Segment::new(top_start_rect_center, top_last_rect_center),
         &Segment::new(right_start_rect_center, right_last_rect_center),
         false,
-    )
-    .unwrap();
+    )?;
 
     let bottom_left_intersection = intersection_of_lines(
         &Segment::new(bottom_start_rect_center, bottom_last_rect_center),
         &Segment::new(left_start_rect_center, left_last_rect_center),
         false,
-    )
-    .unwrap();
+    )?;
 
     let bottom_right_intersection = intersection_of_lines(
         &Segment::new(bottom_start_rect_center, bottom_last_rect_center),
         &Segment::new(right_start_rect_center, right_last_rect_center),
         false,
-    )
-    .unwrap();
+    )?;
 
-    let partial_timing_marks = PartialTimingMarks {
+    let partial_timing_marks = Partial {
         geometry: *geometry,
         top_left_corner: top_left_intersection,
         top_right_corner: top_right_intersection,
@@ -388,7 +371,7 @@ pub fn find_partial_timing_marks_from_candidate_rects(
     };
 
     debug.write("partial_timing_marks", |canvas| {
-        debug::draw_timing_mark_debug_image_mut(canvas, geometry, &partial_timing_marks)
+        debug::draw_timing_mark_debug_image_mut(canvas, geometry, &partial_timing_marks);
     });
 
     Some(partial_timing_marks)
@@ -396,10 +379,10 @@ pub fn find_partial_timing_marks_from_candidate_rects(
 
 #[time]
 pub fn find_complete_timing_marks_from_partial_timing_marks(
-    geometry: &BallotCardGeometry,
-    partial_timing_marks: &PartialTimingMarks,
+    geometry: &Geometry,
+    partial_timing_marks: &Partial,
     debug: &ImageDebugWriter,
-) -> Option<CompleteTimingMarks> {
+) -> Option<Complete> {
     let top_line = &partial_timing_marks.top_rects;
     let bottom_line = &partial_timing_marks.bottom_rects;
     let left_line = &partial_timing_marks.left_rects;
@@ -425,11 +408,11 @@ pub fn find_complete_timing_marks_from_partial_timing_marks(
     };
 
     let mut all_distances = vec![];
-    all_distances.append(&mut distances_between_rects(&top_line));
-    all_distances.append(&mut distances_between_rects(&bottom_line));
-    all_distances.append(&mut distances_between_rects(&left_line));
-    all_distances.append(&mut distances_between_rects(&right_line));
-    all_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    all_distances.append(&mut distances_between_rects(top_line));
+    all_distances.append(&mut distances_between_rects(bottom_line));
+    all_distances.append(&mut distances_between_rects(left_line));
+    all_distances.append(&mut distances_between_rects(right_line));
+    all_distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     if all_distances.is_empty() {
         return None;
@@ -438,54 +421,54 @@ pub fn find_complete_timing_marks_from_partial_timing_marks(
     let median_distance = all_distances[all_distances.len() / 2];
 
     let top_line = infer_missing_timing_marks_on_segment(
-        &top_line,
+        top_line,
         &Segment::new(
             partial_timing_marks.top_left_corner,
             partial_timing_marks.top_right_corner,
         ),
         median_distance,
         geometry.grid_size.width,
-        &geometry,
+        geometry,
     );
 
     let bottom_line = infer_missing_timing_marks_on_segment(
-        &bottom_line,
+        bottom_line,
         &Segment::new(
             partial_timing_marks.bottom_left_corner,
             partial_timing_marks.bottom_right_corner,
         ),
         median_distance,
         geometry.grid_size.width,
-        &geometry,
+        geometry,
     );
 
     let left_line = infer_missing_timing_marks_on_segment(
-        &left_line,
+        left_line,
         &Segment::new(
             partial_timing_marks.top_left_corner,
             partial_timing_marks.bottom_left_corner,
         ),
         median_distance,
         geometry.grid_size.height,
-        &geometry,
+        geometry,
     );
 
     let right_line = infer_missing_timing_marks_on_segment(
-        &right_line,
+        right_line,
         &Segment::new(
             partial_timing_marks.top_right_corner,
             partial_timing_marks.bottom_right_corner,
         ),
         median_distance,
         geometry.grid_size.height,
-        &geometry,
+        geometry,
     );
 
     if top_line.len() != bottom_line.len() || left_line.len() != right_line.len() {
         return None;
     }
 
-    let complete_timing_marks = CompleteTimingMarks {
+    let complete_timing_marks = Complete {
         geometry: *geometry,
         top_rects: top_line,
         bottom_rects: bottom_line,
@@ -506,7 +489,7 @@ pub fn find_complete_timing_marks_from_partial_timing_marks(
             canvas,
             geometry,
             &complete_timing_marks.clone().into(),
-        )
+        );
     });
 
     Some(complete_timing_marks)
@@ -521,7 +504,7 @@ fn infer_missing_timing_marks_on_segment(
     segment: &Segment,
     expected_distance: f32,
     expected_count: u32,
-    geometry: &BallotCardGeometry,
+    geometry: &Geometry,
 ) -> Vec<Rect> {
     if timing_marks.is_empty() {
         return vec![];
@@ -532,17 +515,22 @@ fn infer_missing_timing_marks_on_segment(
     let next_point_vector = segment.with_length(expected_distance).vector();
     let maximum_error = expected_distance / 2.0;
     while inferred_timing_marks.len() < expected_count as usize {
-        // find the point closest existing timing mark
+        // find the closest existing timing mark
         let closest_rect = timing_marks
             .iter()
             .min_by(|a, b| {
                 let a_distance =
-                    Segment::new(center_of_rect(*a), current_timing_mark_center).length();
+                    Segment::new(center_of_rect(a), current_timing_mark_center).length();
                 let b_distance =
-                    Segment::new(center_of_rect(*b), current_timing_mark_center).length();
-                a_distance.partial_cmp(&b_distance).unwrap()
+                    Segment::new(center_of_rect(b), current_timing_mark_center).length();
+                a_distance
+                    .partial_cmp(&b_distance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .unwrap();
+            .map_or_else(
+                || unreachable!("there will always be a closest timing mark"),
+                |rect| rect,
+            );
 
         // if the closest timing mark is close enough, use it
         if Segment::new(center_of_rect(closest_rect), current_timing_mark_center).length()
@@ -564,14 +552,14 @@ fn infer_missing_timing_marks_on_segment(
                     geometry.timing_mark_size.height.round() as u32,
                 ),
             );
-            current_timing_mark_center = current_timing_mark_center + next_point_vector;
+            current_timing_mark_center += next_point_vector;
         }
     }
     inferred_timing_marks
 }
 
 /// Determines whether a rect could be a timing mark based on its size.
-pub fn rect_could_be_timing_mark(geometry: &BallotCardGeometry, rect: &Rect) -> bool {
+pub fn rect_could_be_timing_mark(geometry: &Geometry, rect: &Rect) -> bool {
     let min_timing_mark_width = (geometry.timing_mark_size.width * 1.0 / 4.0).floor() as u32;
     let max_timing_mark_width = (geometry.timing_mark_size.width * 3.0 / 2.0).ceil() as u32;
     let min_timing_mark_height = (geometry.timing_mark_size.height * 2.0 / 3.0).floor() as u32;
@@ -588,7 +576,7 @@ pub fn distances_between_rects(rects: &[Rect]) -> Vec<f32> {
         .windows(2)
         .map(|w| Segment::new(center_of_rect(&w[1]), center_of_rect(&w[0])).length())
         .collect::<Vec<f32>>();
-    distances.sort_by(|a, b| a.partial_cmp(b).expect("comparison of non-NaN to succeed"));
+    distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     distances
 }
 
@@ -653,7 +641,7 @@ pub fn score_oval_marks_from_grid_layout(
     side: BallotSide,
     debug: &ImageDebugWriter,
 ) -> ScoredOvalMarks {
-    let threshold = otsu_level(&img);
+    let threshold = otsu_level(img);
     let mut scored_ovals = vec![];
 
     for grid_position in &grid_layout.grid_positions {
@@ -670,7 +658,7 @@ pub fn score_oval_marks_from_grid_layout(
                     score_oval_mark(
                         img,
                         oval_template,
-                        &expected_oval_center,
+                        expected_oval_center,
                         &location,
                         DEFAULT_MAXIMUM_SEARCH_DISTANCE,
                         threshold,
@@ -682,7 +670,7 @@ pub fn score_oval_marks_from_grid_layout(
     }
 
     debug.write("scored_oval_marks", |canvas| {
-        debug::draw_scored_oval_marks_debug_image_mut(canvas, &scored_ovals)
+        debug::draw_scored_oval_marks_debug_image_mut(canvas, &scored_ovals);
     });
 
     scored_ovals
@@ -692,7 +680,7 @@ pub fn score_oval_marks_from_grid_layout(
 pub fn score_oval_mark(
     img: &GrayImage,
     oval_template: &GrayImage,
-    expected_oval_center: &Point<f32>,
+    expected_oval_center: Point<f32>,
     location: &GridLocation,
     maximum_search_distance: u32,
     threshold: u8,
@@ -723,8 +711,8 @@ pub fn score_oval_mark(
             let cropped = img.view(x as u32, y as u32, width, height).to_image();
             let cropped_and_thresholded = imageproc::contrast::threshold(&cropped, threshold);
 
-            let match_diff = diff(&cropped_and_thresholded, &oval_template);
-            let match_score = OvalMarkScore(ratio(&match_diff, &WHITE));
+            let match_diff = diff(&cropped_and_thresholded, oval_template);
+            let match_score = OvalMarkScore(ratio(&match_diff, WHITE));
 
             if match_score > best_match_score {
                 best_match_score = match_score;
@@ -746,8 +734,8 @@ pub fn score_oval_mark(
         )
         .to_image();
     let binarized_source_image = imageproc::contrast::threshold(&source_image, threshold);
-    let diff_image = diff(&oval_template, &binarized_source_image);
-    let fill_score = OvalMarkScore(ratio(&diff_image, &BLACK));
+    let diff_image = diff(oval_template, &binarized_source_image);
+    let fill_score = OvalMarkScore(ratio(&diff_image, BLACK));
 
     Some(ScoredOvalMark {
         location: *location,

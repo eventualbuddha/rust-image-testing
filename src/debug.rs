@@ -11,28 +11,18 @@ use imageproc::{
 use rusttype::{Font, Scale};
 
 use crate::{
+    ballot_card::Geometry,
     election::GridPosition,
     geometry::{segment_with_length, Segment},
     image_utils::{
         BLUE, CYAN, DARK_BLUE, DARK_CYAN, DARK_GREEN, DARK_RED, GREEN, PINK, RAINBOW, RED,
         WHITE_RGB,
     },
-    timing_marks::{PartialTimingMarks, ScoredOvalMark, TimingMarkGrid}, ballot_card::BallotCardGeometry,
+    timing_marks::{Partial, ScoredOvalMark, TimingMarkGrid},
 };
 
-/// Creates a path for a debug image.
-pub fn debug_image_path(base: &Path, label: &str) -> PathBuf {
-    let mut result = PathBuf::from(base);
-    result.set_file_name(format!(
-        "{}_debug_{}.png",
-        base.file_stem().unwrap_or_default().to_str().unwrap(),
-        label
-    ));
-    result
-}
-
 /// Draws a debug image of the rectangles found using the contour algorithm.
-pub fn draw_contour_rects_debug_image_mut(canvas: &mut RgbImage, contour_rects: &Vec<Rect>) {
+pub fn draw_contour_rects_debug_image_mut(canvas: &mut RgbImage, contour_rects: &[Rect]) {
     for (i, rect) in contour_rects.iter().enumerate() {
         draw_filled_rect_mut(canvas, *rect, RAINBOW[i % RAINBOW.len()]);
     }
@@ -41,8 +31,8 @@ pub fn draw_contour_rects_debug_image_mut(canvas: &mut RgbImage, contour_rects: 
 /// Draws a debug image of the timing marks.
 pub fn draw_timing_mark_debug_image_mut(
     canvas: &mut RgbImage,
-    geometry: &BallotCardGeometry,
-    partial_timing_marks: &PartialTimingMarks,
+    geometry: &Geometry,
+    partial_timing_marks: &Partial,
 ) {
     draw_line_segment_mut(
         canvas,
@@ -158,15 +148,11 @@ pub fn draw_timing_mark_debug_image_mut(
         partial_timing_marks.top_right_corner,
     )
     .length();
-    let _top_line_distance_per_segment =
-        top_line_distance / ((geometry.grid_size.width - 1) as f32);
     let bottom_line_distance = Segment::new(
         partial_timing_marks.bottom_left_corner,
         partial_timing_marks.bottom_right_corner,
     )
     .length();
-    let _bottom_line_distance_per_segment =
-        bottom_line_distance / ((geometry.grid_size.width - 1) as f32);
     for i in 0..geometry.grid_size.width {
         let expected_top_timing_mark_center = segment_with_length(
             &Segment::new(
@@ -254,7 +240,7 @@ pub fn draw_timing_mark_debug_image_mut(
 pub fn draw_timing_mark_grid_debug_image_mut(
     canvas: &mut RgbImage,
     timing_mark_grid: &TimingMarkGrid,
-    geometry: &BallotCardGeometry,
+    geometry: &Geometry,
 ) {
     for x in 0..geometry.grid_size.width {
         for y in 0..geometry.grid_size.height {
@@ -379,8 +365,22 @@ pub struct ImageDebugWriter {
     input_image: Option<GrayImage>,
 }
 
+/// Creates a path for a debug image.
+fn output_path_from_original(base: &Path, label: &str) -> PathBuf {
+    let mut result = PathBuf::from(base);
+    result.set_file_name(format!(
+        "{}_debug_{}.png",
+        base.file_stem()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default(),
+        label
+    ));
+    result
+}
+
 impl ImageDebugWriter {
-    pub fn new(input_path: PathBuf, input_image: GrayImage) -> Self {
+    pub const fn new(input_path: PathBuf, input_image: GrayImage) -> Self {
         Self {
             input_path,
             input_image: Some(input_image),
@@ -399,7 +399,7 @@ impl ImageDebugWriter {
             let mut output_image = DynamicImage::ImageLuma8(input_image.clone()).into_rgb8();
             draw(&mut output_image);
 
-            let output_path = debug_image_path(&self.input_path, label);
+            let output_path = output_path_from_original(&self.input_path, label);
             output_image.save(output_path).expect("image is saved");
         }
     }

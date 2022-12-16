@@ -1,10 +1,13 @@
 use std::io;
 
 use image::{GrayImage, Luma};
-use imageproc::{rect::Rect, contrast::{threshold, otsu_level}};
+use imageproc::{
+    contrast::{otsu_level, threshold},
+    rect::Rect,
+};
+use logging_timer::time;
 
 use crate::image_utils::bleed;
-
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BallotPaperSize {
@@ -19,7 +22,7 @@ pub struct Size<T> {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct BallotCardGeometry {
+pub struct Geometry {
     pub ballot_paper_size: BallotPaperSize,
     pub pixels_per_inch: u32,
     pub canvas_size: Size<u32>,
@@ -37,8 +40,8 @@ pub enum BallotSide {
     Back,
 }
 
-pub fn get_scanned_ballot_card_geometry_8pt5x11() -> BallotCardGeometry {
-    BallotCardGeometry {
+pub fn get_scanned_ballot_card_geometry_8pt5x11() -> Geometry {
+    Geometry {
         ballot_paper_size: BallotPaperSize::Letter,
         pixels_per_inch: 200,
         canvas_size: Size {
@@ -63,8 +66,8 @@ pub fn get_scanned_ballot_card_geometry_8pt5x11() -> BallotCardGeometry {
     }
 }
 
-pub fn get_scanned_ballot_card_geometry_8pt5x14() -> BallotCardGeometry {
-    BallotCardGeometry {
+pub fn get_scanned_ballot_card_geometry_8pt5x14() -> Geometry {
+    Geometry {
         ballot_paper_size: BallotPaperSize::Legal,
         pixels_per_inch: 200,
         canvas_size: Size {
@@ -89,7 +92,7 @@ pub fn get_scanned_ballot_card_geometry_8pt5x14() -> BallotCardGeometry {
     }
 }
 
-pub fn get_scanned_ballot_card_geometry(size: (u32, u32)) -> Option<BallotCardGeometry> {
+pub fn get_scanned_ballot_card_geometry(size: (u32, u32)) -> Option<Geometry> {
     let (width, height) = size;
     let aspect_ratio = width as f32 / height as f32;
     let letter_size = get_scanned_ballot_card_geometry_8pt5x11();
@@ -107,6 +110,8 @@ pub fn get_scanned_ballot_card_geometry(size: (u32, u32)) -> Option<BallotCardGe
         None
     }
 }
+
+#[time]
 pub fn load_oval_template() -> Option<GrayImage> {
     let oval_scan_bytes = include_bytes!("../oval_scan.png");
     let inner = io::Cursor::new(oval_scan_bytes);
@@ -116,6 +121,6 @@ pub fn load_oval_template() -> Option<GrayImage> {
     };
     Some(bleed(
         &threshold(&oval_scan_image, otsu_level(&oval_scan_image)),
-        &Luma([0u8]),
+        Luma([0u8]),
     ))
 }

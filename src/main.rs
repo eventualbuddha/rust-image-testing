@@ -3,13 +3,13 @@ extern crate pretty_env_logger;
 
 use std::env;
 use std::path::Path;
+use std::process::exit;
 
 use clap::{arg, command, Command};
-use logging_timer::{finish, timer};
 
 use crate::ballot_card::load_oval_template;
 use crate::election::Election;
-use crate::interpret::{InterpretOptions, interpret_ballot_card};
+use crate::interpret::{interpret_ballot_card, Options};
 
 mod ballot_card;
 mod debug;
@@ -28,39 +28,44 @@ fn main() {
     let debug = matches.get_flag("debug");
     let side_a_path = matches
         .get_one::<String>("side_a_path")
-        .expect("side A image path");
+        .expect("side A image path is required");
     let side_b_path = matches
         .get_one::<String>("side_b_path")
-        .expect("side B image path");
+        .expect("side B image path is required");
     let election_definition_path = matches
         .get_one::<String>("election")
-        .expect("election path");
+        .expect("election path is required");
+
+    let election_definition_json = match std::fs::read_to_string(election_definition_path) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Error reading election definition: {}", e);
+            exit(1);
+        }
+    };
 
     // parse contents of election_definition_path with serde_json
-    let election: Election = match serde_json::from_str(
-        &std::fs::read_to_string(election_definition_path).expect("election file"),
-    ) {
+    let election: Election = match serde_json::from_str(&election_definition_json) {
         Ok(election_definition) => election_definition,
         Err(e) => {
-            panic!("Error parsing election definition: {}", e);
+            eprintln!("Error parsing election definition: {}", e);
+            exit(1);
         }
     };
 
-    println!("Election: {:?}", election);
+    let oval_template = load_oval_template().map_or_else(
+        || {
+            eprintln!("Error loading oval template");
+            exit(1);
+        },
+        |image| image,
+    );
 
-    let oval_template = match load_oval_template() {
-        Some(image) => image,
-        None => {
-            panic!("Error loading oval scan image");
-        }
-    };
-
-    let options = InterpretOptions {
+    let options = Options {
         debug,
         oval_template,
         election,
     };
-    let timer = timer!("total");
 
     match interpret_ballot_card(Path::new(&side_a_path), Path::new(&side_b_path), &options) {
         Ok((front, back)) => {
@@ -68,13 +73,13 @@ fn main() {
             println!("Back: {:?}", back);
         }
         Err(e) => {
-            println!("Error: {:?}", e);
+            eprintln!("Error: {:?}", e);
+            exit(1);
         }
     }
-
-    finish!(timer);
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn cli() -> Command {
     command!()
         .arg(arg!(-e --election <PATH> "Path to election.json file").required(true))

@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 
 use imageproc::rect::Rect;
 
-use crate::timing_marks::{CompleteTimingMarks, PartialTimingMarks};
+use crate::timing_marks::{Complete, Partial};
 
 pub const METADATA_BITS: usize = 32;
 
@@ -145,6 +145,13 @@ pub fn compute_bits_from_bottom_timing_marks(
         });
     }
 
+    if partial_timing_marks.len() < 2 {
+        return Err(BallotCardMetadataError::InvalidTimingMarkCount {
+            expected: 2,
+            actual: partial_timing_marks.len(),
+        });
+    }
+
     let mut bits = [false; METADATA_BITS];
 
     let mut partial_iter = partial_timing_marks.iter().rev();
@@ -154,18 +161,24 @@ pub fn compute_bits_from_bottom_timing_marks(
     complete_iter.next();
     partial_iter.next();
 
-    let mut current_complete = complete_iter.next().unwrap();
-    let mut current_partial = partial_iter.next().unwrap();
+    let (mut current_complete, mut current_partial) =
+        match (complete_iter.next(), partial_iter.next()) {
+            (Some(complete), Some(partial)) => (complete, partial),
+            _ => unreachable!("There are at least 2 partial timing marks."),
+        };
 
-    for i in 0..METADATA_BITS {
+    for bit in &mut bits {
         if current_complete == current_partial {
-            bits[i] = true;
+            *bit = true;
             current_partial = match partial_iter.next() {
                 Some(partial) => partial,
                 None => break,
             };
         }
-        current_complete = complete_iter.next().unwrap();
+        current_complete = complete_iter.next().map_or_else(
+            || unreachable!("There should be 34 complete timing marks."),
+            |complete| complete,
+        );
     }
 
     Ok(bits)
@@ -174,33 +187,29 @@ pub fn compute_bits_from_bottom_timing_marks(
 pub fn decode_front_metadata_from_bits(
     bits_rtl: &[bool; METADATA_BITS],
 ) -> Result<BallotCardMetadataFront, BallotCardMetadataError> {
-    let computed_mod_4_checksum = bits_rtl[2..]
-        .iter()
-        .map(|&bit| if bit { 1 } else { 0 })
-        .sum::<u8>()
-        % 4;
+    let computed_mod_4_checksum = bits_rtl[2..].iter().map(|&bit| u8::from(bit)).sum::<u8>() % 4;
 
     let mod_4_checksum = bits_rtl[0..2]
         .iter()
         .rev()
-        .fold(0, |acc, &bit| (acc << 1) + if bit { 1 } else { 0 });
+        .fold(0, |acc, &bit| (acc << 1) + u8::from(bit));
 
     let batch_or_precinct_number = bits_rtl[2..15]
         .iter()
         .rev()
-        .fold(0, |acc, &bit| (acc << 1) + if bit { 1 } else { 0 });
+        .fold(0, |acc, &bit| (acc << 1) + u16::from(bit));
 
     let card_number = bits_rtl[15..28]
         .iter()
         .rev()
-        .fold(0, |acc, &bit| (acc << 1) + if bit { 1 } else { 0 });
+        .fold(0, |acc, &bit| (acc << 1) + u16::from(bit));
 
     let sequence_number = bits_rtl[28..31]
         .iter()
         .rev()
-        .fold(0, |acc, &bit| (acc << 1) + if bit { 1 } else { 0 });
+        .fold(0, |acc, &bit| (acc << 1) + u8::from(bit));
 
-    let start_bit = if bits_rtl[31] { 1u8 } else { 0u8 };
+    let start_bit = u8::from(bits_rtl[31]);
 
     let front_metadata = BallotCardMetadataFront {
         bits: *bits_rtl,
@@ -219,7 +228,7 @@ pub fn decode_front_metadata_from_bits(
     if start_bit != 1 {
         return Err(BallotCardMetadataError::ValueOutOfRange {
             field: "start_bit".to_string(),
-            value: start_bit as u32,
+            value: u32::from(start_bit),
             min: 1,
             max: 1,
             metadata: BallotCardMetadata::Front(front_metadata),
@@ -235,22 +244,22 @@ pub fn decode_back_metadata_from_bits(
     let election_day = bits_rtl[0..5]
         .iter()
         .rev()
-        .fold(0, |acc, &bit| (acc << 1) + if bit { 1 } else { 0 });
+        .fold(0, |acc, &bit| (acc << 1) + u8::from(bit));
 
     let election_month = bits_rtl[5..9]
         .iter()
         .rev()
-        .fold(0, |acc, &bit| (acc << 1) + if bit { 1 } else { 0 });
+        .fold(0, |acc, &bit| (acc << 1) + u8::from(bit));
 
     let election_year = bits_rtl[9..16]
         .iter()
         .rev()
-        .fold(0, |acc, &bit| (acc << 1) + if bit { 1 } else { 0 });
+        .fold(0, |acc, &bit| (acc << 1) + u8::from(bit));
 
     let election_type = bits_rtl[16..21]
         .iter()
         .rev()
-        .fold(0, |acc, &bit| (acc << 1) + if bit { 1 } else { 0 });
+        .fold(0, |acc, &bit| (acc << 1) + u8::from(bit));
 
     let ender_code: [bool; 11] = bits_rtl[21..32]
         .try_into()
@@ -274,8 +283,8 @@ pub fn decode_back_metadata_from_bits(
 }
 
 pub fn decode_metadata_from_timing_marks(
-    partial_timing_marks: &PartialTimingMarks,
-    complete_timing_marks: &CompleteTimingMarks,
+    partial_timing_marks: &Partial,
+    complete_timing_marks: &Complete,
 ) -> Result<BallotCardMetadata, BallotCardMetadataError> {
     let bits = compute_bits_from_bottom_timing_marks(
         &partial_timing_marks.bottom_rects,

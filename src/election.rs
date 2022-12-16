@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{types::idtype, ballot_card::BallotSide};
+use crate::{ballot_card::BallotSide, types::idtype};
 
 // import idtype macro from types.rs
 
@@ -58,9 +58,9 @@ pub enum GridPosition {
 impl Display for GridPosition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GridPosition::Option { option_id, .. } => write!(f, "{}", option_id),
+            Self::Option { option_id, .. } => write!(f, "{}", option_id),
 
-            GridPosition::WriteIn { write_in_index, .. } => {
+            Self::WriteIn { write_in_index, .. } => {
                 write!(f, "Write-In {}", write_in_index)
             }
         }
@@ -68,13 +68,12 @@ impl Display for GridPosition {
 }
 
 impl GridPosition {
-    pub fn location(&self) -> GridLocation {
+    pub const fn location(&self) -> GridLocation {
         match self {
-            GridPosition::Option {
+            Self::Option {
                 side, column, row, ..
-            } => GridLocation::new(*side, *column, *row),
-
-            GridPosition::WriteIn {
+            }
+            | Self::WriteIn {
                 side, column, row, ..
             } => GridLocation::new(*side, *column, *row),
         }
@@ -89,7 +88,7 @@ pub struct GridLocation {
 }
 
 impl GridLocation {
-    pub fn new(side: BallotSide, column: u32, row: u32) -> Self {
+    pub const fn new(side: BallotSide, column: u32, row: u32) -> Self {
         Self { side, column, row }
     }
 }

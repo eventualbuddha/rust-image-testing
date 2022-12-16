@@ -5,8 +5,8 @@ use imageproc::rect::Rect;
 use logging_timer::time;
 
 use crate::ballot_card::get_scanned_ballot_card_geometry;
-use crate::ballot_card::BallotCardGeometry;
 use crate::ballot_card::BallotSide;
+use crate::ballot_card::Geometry;
 use crate::debug::ImageDebugWriter;
 use crate::election::BallotStyleId;
 use crate::election::Election;
@@ -17,28 +17,27 @@ use crate::timing_marks::find_timing_mark_grid;
 use crate::timing_marks::{score_oval_marks_from_grid_layout, ScoredOvalMarks, TimingMarkGrid};
 
 #[derive(Debug, Clone)]
-pub struct InterpretOptions {
+pub struct Options {
     pub debug: bool,
     pub oval_template: GrayImage,
     pub election: Election,
 }
 
-pub type LoadedBallotPage = (GrayImage, BallotCardGeometry);
-pub type LoadedBallotCard = (GrayImage, GrayImage, BallotCardGeometry);
+pub type LoadedBallotPage = (GrayImage, Geometry);
+pub type LoadedBallotCard = (GrayImage, GrayImage, Geometry);
 
 pub type InterpretedBallotPage = (TimingMarkGrid, ScoredOvalMarks);
-pub type InterpretBallotCardResult =
-    Result<(InterpretedBallotPage, InterpretedBallotPage), InterpretBallotCardError>;
+pub type Result = core::result::Result<(InterpretedBallotPage, InterpretedBallotPage), Error>;
 
 #[derive(Debug)]
-pub enum InterpretBallotCardError {
-    ImageOpenError(PathBuf),
+pub enum Error {
+    ImageOpenFailure(PathBuf),
     InvalidCardMetadata(BallotCardMetadata, BallotCardMetadata),
-    MetadataError(PathBuf, BallotCardMetadataError),
-    MismatchedBallotCardGeometries((PathBuf, BallotCardGeometry), (PathBuf, BallotCardGeometry)),
+    InvalidMetadata(PathBuf, BallotCardMetadataError),
+    MismatchedBallotCardGeometries((PathBuf, Geometry), (PathBuf, Geometry)),
     MissingGridLayout(BallotCardMetadata, BallotCardMetadata),
     MissingTimingMarks(Vec<Rect>),
-    UnexpectedDimensionsError(PathBuf, (u32, u32)),
+    UnexpectedDimensions(PathBuf, (u32, u32)),
 }
 
 #[time]
@@ -46,7 +45,7 @@ pub enum InterpretBallotCardError {
 fn load_ballot_card_images(
     side_a_path: &Path,
     side_b_path: &Path,
-) -> Result<LoadedBallotCard, InterpretBallotCardError> {
+) -> core::result::Result<LoadedBallotCard, Error> {
     let (side_a_result, side_b_result) = rayon::join(
         || load_ballot_page_image(side_a_path),
         || load_ballot_page_image(side_b_path),
@@ -56,7 +55,7 @@ fn load_ballot_card_images(
     let (side_b_image, side_b_geometry) = side_b_result?;
 
     if side_a_geometry != side_b_geometry {
-        return Err(InterpretBallotCardError::MismatchedBallotCardGeometries(
+        return Err(Error::MismatchedBallotCardGeometries(
             (side_a_path.to_path_buf(), side_a_geometry),
             (side_b_path.to_path_buf(), side_b_geometry),
         ));
@@ -66,22 +65,16 @@ fn load_ballot_card_images(
 }
 
 #[time]
-pub fn load_ballot_page_image(
-    image_path: &Path,
-) -> Result<LoadedBallotPage, InterpretBallotCardError> {
-    let img = match image::open(&image_path) {
+pub fn load_ballot_page_image(image_path: &Path) -> core::result::Result<LoadedBallotPage, Error> {
+    let img = match image::open(image_path) {
         Ok(img) => img.into_luma8(),
-        Err(_) => {
-            return Err(InterpretBallotCardError::ImageOpenError(
-                image_path.to_path_buf(),
-            ))
-        }
+        Err(_) => return Err(Error::ImageOpenFailure(image_path.to_path_buf())),
     };
 
     let geometry = match get_scanned_ballot_card_geometry(img.dimensions()) {
         Some(geometry) => geometry,
         None => {
-            return Err(InterpretBallotCardError::UnexpectedDimensionsError(
+            return Err(Error::UnexpectedDimensions(
                 image_path.to_path_buf(),
                 img.dimensions(),
             ))
@@ -98,11 +91,7 @@ pub fn load_ballot_page_image(
 }
 
 #[time]
-pub fn interpret_ballot_card(
-    side_a_path: &Path,
-    side_b_path: &Path,
-    options: &InterpretOptions,
-) -> InterpretBallotCardResult {
+pub fn interpret_ballot_card(side_a_path: &Path, side_b_path: &Path, options: &Options) -> Result {
     let (side_a_image, side_b_image, geometry) = load_ballot_card_images(side_a_path, side_b_path)?;
 
     let side_a_debug = if options.debug {
@@ -117,8 +106,8 @@ pub fn interpret_ballot_card(
     };
 
     let (side_a_result, side_b_result) = rayon::join(
-        || find_timing_mark_grid(&side_a_path, &geometry, &side_a_image, &side_a_debug),
-        || find_timing_mark_grid(&side_b_path, &geometry, &side_b_image, &side_b_debug),
+        || find_timing_mark_grid(side_a_path, &geometry, &side_a_image, &side_a_debug),
+        || find_timing_mark_grid(side_b_path, &geometry, &side_b_image, &side_b_debug),
     );
 
     let side_a_grid = side_a_result?;
@@ -135,7 +124,7 @@ pub fn interpret_ballot_card(
                 (side_a_image, side_a_grid, side_a_debug),
             ),
             _ => {
-                return Err(InterpretBallotCardError::InvalidCardMetadata(
+                return Err(Error::InvalidCardMetadata(
                     side_a_grid.metadata,
                     side_b_grid.metadata,
                 ))
@@ -146,7 +135,7 @@ pub fn interpret_ballot_card(
         BallotCardMetadata::Front(metadata) => {
             BallotStyleId::from(format!("card-number-{}", metadata.card_number))
         }
-        _ => unreachable!(),
+        BallotCardMetadata::Back(_) => unreachable!(),
     };
 
     // TODO: discover this from the ballot card metadata
@@ -158,7 +147,7 @@ pub fn interpret_ballot_card(
     {
         Some(layout) => layout,
         None => {
-            return Err(InterpretBallotCardError::MissingGridLayout(
+            return Err(Error::MissingGridLayout(
                 front_grid.metadata,
                 back_grid.metadata,
             ))
@@ -171,7 +160,7 @@ pub fn interpret_ballot_card(
                 &front_image,
                 &options.oval_template,
                 &front_grid,
-                &grid_layout,
+                grid_layout,
                 BallotSide::Front,
                 &front_debug,
             )
@@ -181,7 +170,7 @@ pub fn interpret_ballot_card(
                 &back_image,
                 &options.oval_template,
                 &back_grid,
-                &grid_layout,
+                grid_layout,
                 BallotSide::Back,
                 &back_debug,
             )

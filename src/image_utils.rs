@@ -1,4 +1,7 @@
-use image::{GrayImage, Luma, Rgb, imageops::{resize, FilterType::Lanczos3}};
+use image::{
+    imageops::{resize, FilterType::Lanczos3},
+    GrayImage, Luma, Rgb,
+};
 use logging_timer::time;
 
 pub const WHITE: Luma<u8> = Luma([255]);
@@ -20,10 +23,10 @@ pub const PINK: Rgb<u8> = Rgb([255, 0, 255]);
 pub const RAINBOW: [Rgb<u8>; 7] = [RED, ORANGE, YELLOW, GREEN, BLUE, INDIGO, VIOLET];
 
 /// Bleed the given luma value outwards from any pixels that match it.
-pub fn bleed(img: &GrayImage, luma: &Luma<u8>) -> GrayImage {
+pub fn bleed(img: &GrayImage, luma: Luma<u8>) -> GrayImage {
     let mut out = img.clone();
     for (x, y, pixel) in img.enumerate_pixels() {
-        if *pixel != *luma {
+        if *pixel != luma {
             continue;
         }
 
@@ -81,12 +84,12 @@ pub fn diff(base: &GrayImage, compare: &GrayImage) -> GrayImage {
 }
 
 /// Determines the number of pixels in an image that match the given luma.
-pub fn count_pixels(img: &GrayImage, luma: &Luma<u8>) -> u32 {
-    img.pixels().filter(|p| *p == luma).count() as u32
+pub fn count_pixels(img: &GrayImage, luma: Luma<u8>) -> u32 {
+    img.pixels().filter(|p| **p == luma).count() as u32
 }
 
 /// Determines the ratio of pixels in an image that match the given luma.
-pub fn ratio(img: &GrayImage, luma: &Luma<u8>) -> f32 {
+pub fn ratio(img: &GrayImage, luma: Luma<u8>) -> f32 {
     let total = img.width() * img.height();
     count_pixels(img, luma) as f32 / total as f32
 }

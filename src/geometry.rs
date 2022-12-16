@@ -20,7 +20,7 @@ impl Segment {
     pub fn length(&self) -> f32 {
         let dx = self.end.x - self.start.x;
         let dy = self.end.y - self.start.y;
-        (dx * dx + dy * dy).sqrt()
+        dx.hypot(dy)
     }
 
     /// Generates a new segment based on the given segment, but with the
@@ -235,6 +235,10 @@ mod normalize_center_of_rect {
 }
 
 pub fn find_best_line_through_items(rects: &Vec<Rect>, angle: f32, tolerance: f32) -> Vec<Rect> {
+    if rects.is_empty() {
+        return vec![];
+    }
+
     let best_rects: Vec<&Rect> = rects
         .par_iter()
         .fold_with(vec![], |best_rects, rect| {
@@ -271,7 +275,7 @@ pub fn find_best_line_through_items(rects: &Vec<Rect>, angle: f32, tolerance: f3
                 best_rects
             }
         })
-        .unwrap();
+        .expect("at least one result because we have at least one rect");
 
     return best_rects.iter().map(|r| **r).collect();
 }
