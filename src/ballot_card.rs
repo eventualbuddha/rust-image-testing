@@ -176,10 +176,7 @@ mod tests {
             get_scanned_ballot_card_geometry((1696, 2800)),
             Some(get_scanned_ballot_card_geometry_8pt5x14())
         );
-        assert_eq!(
-            get_scanned_ballot_card_geometry((1500, 1500)),
-            None
-        );
+        assert_eq!(get_scanned_ballot_card_geometry((1500, 1500)), None);
     }
 
     #[test]

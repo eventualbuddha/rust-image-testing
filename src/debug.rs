@@ -440,22 +440,17 @@ mod tests {
         let debug_writer = ImageDebugWriter::new(file.path().to_path_buf(), input_image);
 
         let mut called = false;
-        let output_path = debug_writer.write("test", |image| {
-            called = true;
-            assert_eq!(image.width(), 10);
-            assert_eq!(image.height(), 10);
-        }).unwrap();
+        let output_path = debug_writer
+            .write("test", |image| {
+                called = true;
+                assert_eq!(image.width(), 10);
+                assert_eq!(image.height(), 10);
+            })
+            .unwrap();
         assert!(called);
-        assert!(output_path
-            .as_os_str()
-            .to_str()
-            .unwrap()
-            .contains("test"));
+        assert!(output_path.as_os_str().to_str().unwrap().contains("test"));
         assert_eq!(
-            image::open(output_path)
-                .unwrap()
-                .to_luma8()
-                .dimensions(),
+            image::open(output_path).unwrap().to_luma8().dimensions(),
             (10, 10)
         );
     }

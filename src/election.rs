@@ -119,7 +119,7 @@ mod tests {
             column: 1,
             row: 2,
             contest_id: ContestId::from("contest-1".to_string()),
-            option_id: OptionId::from("option-1".to_string())
+            option_id: OptionId::from("option-1".to_string()),
         };
         assert_eq!(position.location().side, BallotSide::Front);
         assert_eq!(position.location().column, 1);
