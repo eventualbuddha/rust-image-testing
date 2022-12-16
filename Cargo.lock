@@ -984,6 +984,7 @@ dependencies = [
  "rusttype",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

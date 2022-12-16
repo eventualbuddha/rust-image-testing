@@ -394,13 +394,81 @@ impl ImageDebugWriter {
         }
     }
 
-    pub fn write(&self, label: &str, draw: impl FnOnce(&mut RgbImage)) {
-        if let Some(input_image) = &self.input_image {
-            let mut output_image = DynamicImage::ImageLuma8(input_image.clone()).into_rgb8();
-            draw(&mut output_image);
+    pub fn write(&self, label: &str, draw: impl FnOnce(&mut RgbImage)) -> Option<PathBuf> {
+        match &self.input_image {
+            Some(input_image) => {
+                let mut output_image = DynamicImage::ImageLuma8(input_image.clone()).into_rgb8();
+                draw(&mut output_image);
 
-            let output_path = output_path_from_original(&self.input_path, label);
-            output_image.save(output_path).expect("image is saved");
+                let output_path = output_path_from_original(&self.input_path, label);
+                output_image.save(&output_path).expect("image is saved");
+                Some(output_path)
+            }
+            None => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_output_path_from_original() {
+        use std::path::Path;
+
+        let base = Path::new("foo/bar/baz.png");
+        let result = output_path_from_original(base, "test");
+        assert_eq!(result, Path::new("foo/bar/baz_debug_test.png"));
+    }
+
+    #[test]
+    fn test_output_path_from_original_no_extension() {
+        use std::path::Path;
+
+        let base = Path::new("foo/bar/baz");
+        let result = output_path_from_original(base, "test");
+        assert_eq!(result, Path::new("foo/bar/baz_debug_test.png"));
+    }
+
+    #[test]
+    fn test_debug_writer() {
+        use image::GrayImage;
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let input_image = GrayImage::new(10, 10);
+        let debug_writer = ImageDebugWriter::new(file.path().to_path_buf(), input_image);
+
+        let mut called = false;
+        let output_path = debug_writer.write("test", |image| {
+            called = true;
+            assert_eq!(image.width(), 10);
+            assert_eq!(image.height(), 10);
+        }).unwrap();
+        assert!(called);
+        assert!(output_path
+            .as_os_str()
+            .to_str()
+            .unwrap()
+            .contains("test"));
+        assert_eq!(
+            image::open(output_path)
+                .unwrap()
+                .to_luma8()
+                .dimensions(),
+            (10, 10)
+        );
+    }
+
+    #[test]
+    fn test_debug_writer_disabled() {
+        let debug_writer = ImageDebugWriter::disabled();
+
+        let mut called = false;
+        let output_path = debug_writer.write("test", |_| {
+            called = true;
+        });
+        assert!(!called);
+        assert!(output_path.is_none());
     }
 }

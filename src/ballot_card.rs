@@ -6,6 +6,7 @@ use imageproc::{
     rect::Rect,
 };
 use logging_timer::time;
+use serde::{Deserialize, Serialize};
 
 use crate::image_utils::bleed;
 
@@ -38,6 +39,42 @@ pub struct Geometry {
 pub enum BallotSide {
     Front,
     Back,
+}
+
+impl TryFrom<&str> for BallotSide {
+    type Error = ();
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "front" => Ok(Self::Front),
+            "back" => Ok(Self::Back),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BallotSide {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.as_str()
+            .try_into()
+            .map_err(|_| serde::de::Error::custom(format!("invalid value for BallotSide: {}", s)))
+    }
+}
+
+impl Serialize for BallotSide {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Front => serializer.serialize_str("front"),
+            Self::Back => serializer.serialize_str("back"),
+        }
+    }
 }
 
 pub fn get_scanned_ballot_card_geometry_8pt5x11() -> Geometry {
@@ -123,4 +160,62 @@ pub fn load_oval_template() -> Option<GrayImage> {
         &threshold(&oval_scan_image, otsu_level(&oval_scan_image)),
         Luma([0u8]),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_scanned_ballot_card_geometry() {
+        assert_eq!(
+            get_scanned_ballot_card_geometry((1696, 2200)),
+            Some(get_scanned_ballot_card_geometry_8pt5x11())
+        );
+        assert_eq!(
+            get_scanned_ballot_card_geometry((1696, 2800)),
+            Some(get_scanned_ballot_card_geometry_8pt5x14())
+        );
+        assert_eq!(
+            get_scanned_ballot_card_geometry((1500, 1500)),
+            None
+        );
+    }
+
+    #[test]
+    fn test_load_oval_template() {
+        assert!(load_oval_template().is_some());
+    }
+
+    #[test]
+    fn test_ballot_side_try_from() {
+        assert_eq!(BallotSide::try_from("front"), Ok(BallotSide::Front));
+        assert_eq!(BallotSide::try_from("back"), Ok(BallotSide::Back));
+        assert_eq!(BallotSide::try_from("foo"), Err(()));
+    }
+
+    #[test]
+    fn test_ballot_side_deserialize() {
+        assert_eq!(
+            serde_json::from_str::<BallotSide>(r#""front""#).unwrap(),
+            BallotSide::Front
+        );
+        assert_eq!(
+            serde_json::from_str::<BallotSide>(r#""back""#).unwrap(),
+            BallotSide::Back
+        );
+        assert!(serde_json::from_str::<BallotSide>(r#""foo""#).is_err());
+    }
+
+    #[test]
+    fn test_ballot_side_serialize() {
+        assert_eq!(
+            serde_json::to_string(&BallotSide::Front).unwrap(),
+            r#""front""#
+        );
+        assert_eq!(
+            serde_json::to_string(&BallotSide::Back).unwrap(),
+            r#""back""#
+        );
+    }
 }

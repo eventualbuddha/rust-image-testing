@@ -4,8 +4,10 @@ use imageproc::rect::Rect;
 
 use crate::timing_marks::{Complete, Partial};
 
+/// Expected number of metadata bits encoded in the bottom row of a ballot card.
 pub const METADATA_BITS: usize = 32;
 
+/// Ending sequence of bits encoded on the back of a ballot card.
 pub const ENDER_CODE: [bool; 11] = [
     false, true, true, true, true, false, true, true, true, true, false,
 ];

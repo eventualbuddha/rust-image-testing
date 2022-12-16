@@ -99,3 +99,86 @@ pub struct MarkThresholds {
     pub definite: f32,
     pub marginal: f32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_grid_location() {
+        let location = GridLocation::new(BallotSide::Front, 1, 2);
+        assert_eq!(location.side, BallotSide::Front);
+        assert_eq!(location.column, 1);
+        assert_eq!(location.row, 2);
+    }
+
+    #[test]
+    fn test_grid_position() {
+        let position = GridPosition::Option {
+            side: BallotSide::Front,
+            column: 1,
+            row: 2,
+            contest_id: ContestId::from("contest-1".to_string()),
+            option_id: OptionId::from("option-1".to_string())
+        };
+        assert_eq!(position.location().side, BallotSide::Front);
+        assert_eq!(position.location().column, 1);
+        assert_eq!(position.location().row, 2);
+    }
+
+    #[test]
+    fn test_grid_position_option_serialization() {
+        let json = r#"{
+            "type": "option",
+            "side": "front",
+            "column": 1,
+            "row": 2,
+            "contestId": "contest-1",
+            "optionId": "option-1"
+        }"#;
+        match serde_json::from_str(json).unwrap() {
+            GridPosition::Option {
+                side,
+                column,
+                row,
+                contest_id,
+                option_id,
+            } => {
+                assert_eq!(side, BallotSide::Front);
+                assert_eq!(column, 1);
+                assert_eq!(row, 2);
+                assert_eq!(contest_id, ContestId::from("contest-1".to_string()));
+                assert_eq!(option_id, OptionId::from("option-1".to_string()));
+            }
+            _ => panic!("expected Option"),
+        }
+    }
+
+    #[test]
+    fn test_grid_position_write_in_serialization() {
+        let json = r#"{
+            "type": "write-in",
+            "side": "front",
+            "column": 1,
+            "row": 2,
+            "contestId": "contest-1",
+            "writeInIndex": 3
+        }"#;
+        match serde_json::from_str(json).unwrap() {
+            GridPosition::WriteIn {
+                side,
+                column,
+                row,
+                contest_id,
+                write_in_index,
+            } => {
+                assert_eq!(side, BallotSide::Front);
+                assert_eq!(column, 1);
+                assert_eq!(row, 2);
+                assert_eq!(contest_id, ContestId::from("contest-1".to_string()));
+                assert_eq!(write_in_index, 3);
+            }
+            _ => panic!("expected WriteIn"),
+        }
+    }
+}
