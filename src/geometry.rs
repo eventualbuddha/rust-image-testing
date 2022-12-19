@@ -1,8 +1,92 @@
-use std::f32::consts::PI;
+use std::{
+    f32::consts::PI,
+    ops::{Add, AddAssign},
+};
 
-use imageproc::point::Point;
-use imageproc::rect::Rect;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
+use serde::Serialize;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct Point<T> {
+    pub x: T,
+    pub y: T,
+}
+
+impl<T> Point<T> {
+    pub const fn new(x: T, y: T) -> Self {
+        Self { x, y }
+    }
+}
+
+impl<T: Add<Output = T>> Add for Point<T> {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self::new(self.x + other.x, self.y + other.y)
+    }
+}
+
+impl<T: AddAssign + Copy> AddAssign for Point<T> {
+    fn add_assign(&mut self, rhs: Self) {
+        self.x += rhs.x;
+        self.y += rhs.y;
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct Rect {
+    left: i32,
+    top: i32,
+    width: u32,
+    height: u32,
+}
+
+impl Rect {
+    pub const fn new(left: i32, top: i32, width: u32, height: u32) -> Self {
+        Self {
+            left,
+            top,
+            width,
+            height,
+        }
+    }
+
+    pub const fn left(&self) -> i32 {
+        self.left
+    }
+
+    pub const fn top(&self) -> i32 {
+        self.top
+    }
+
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub const fn right(&self) -> i32 {
+        self.left + self.width as i32 - 1
+    }
+
+    pub const fn bottom(&self) -> i32 {
+        self.top + self.height as i32 - 1
+    }
+}
+
+impl From<Rect> for imageproc::rect::Rect {
+    fn from(r: Rect) -> Self {
+        Self::at(r.left, r.top).of_size(r.width, r.height)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct Size<T> {
+    pub width: T,
+    pub height: T,
+}
 
 /// A line segment from `start` to `end`.
 pub struct Segment {
@@ -207,7 +291,7 @@ mod normalize_center_of_rect {
 
     #[test]
     fn test_center_of_rect() {
-        let rect = super::Rect::at(0, 0).of_size(10, 10);
+        let rect = super::Rect::new(0, 0, 10, 10);
         let center = super::center_of_rect(&rect);
         assert_eq!(center.x, 4.5);
         assert_eq!(center.y, 4.5);
@@ -215,7 +299,7 @@ mod normalize_center_of_rect {
 
     #[test]
     fn test_center_of_rect_with_odd_dimensions() {
-        let rect = super::Rect::at(0, 0).of_size(11, 11);
+        let rect = super::Rect::new(0, 0, 11, 11);
         let center = super::center_of_rect(&rect);
         assert_eq!(center.x, 5.0);
         assert_eq!(center.y, 5.0);
@@ -224,7 +308,7 @@ mod normalize_center_of_rect {
     proptest! {
         #[test]
         fn prop_center_of_rect_is_in_rect(x in 0i32..100i32, y in 0i32..100i32, width in 1u32..100u32, height in 1u32..100u32) {
-            let rect = super::Rect::at(x, y).of_size(width, height);
+            let rect = super::Rect::new(x, y, width, height);
             let center = super::center_of_rect(&rect);
             prop_assert!((rect.left() as f32) <= center.x);
             prop_assert!(center.x <= (rect.right() as f32));

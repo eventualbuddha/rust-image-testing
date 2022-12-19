@@ -1,19 +1,16 @@
 use std::path::{Path, PathBuf};
 
 use image::{DynamicImage, GrayImage, Rgb, RgbImage};
-use imageproc::{
-    drawing::{
-        draw_cross_mut, draw_filled_rect_mut, draw_hollow_rect_mut, draw_line_segment_mut,
-        draw_text_mut, text_size,
-    },
-    rect::Rect,
+use imageproc::drawing::{
+    draw_cross_mut, draw_filled_rect_mut, draw_hollow_rect_mut, draw_line_segment_mut,
+    draw_text_mut, text_size,
 };
 use rusttype::{Font, Scale};
 
 use crate::{
     ballot_card::Geometry,
     election::GridPosition,
-    geometry::{segment_with_length, Segment},
+    geometry::{segment_with_length, Rect, Segment},
     image_utils::{
         BLUE, CYAN, DARK_BLUE, DARK_CYAN, DARK_GREEN, DARK_RED, GREEN, PINK, RAINBOW, RED,
         WHITE_RGB,
@@ -24,7 +21,7 @@ use crate::{
 /// Draws a debug image of the rectangles found using the contour algorithm.
 pub fn draw_contour_rects_debug_image_mut(canvas: &mut RgbImage, contour_rects: &[Rect]) {
     for (i, rect) in contour_rects.iter().enumerate() {
-        draw_filled_rect_mut(canvas, *rect, RAINBOW[i % RAINBOW.len()]);
+        draw_filled_rect_mut(canvas, (*rect).into(), RAINBOW[i % RAINBOW.len()]);
     }
 }
 
@@ -87,32 +84,32 @@ pub fn draw_timing_mark_debug_image_mut(
     );
 
     for rect in &partial_timing_marks.top_rects {
-        draw_filled_rect_mut(canvas, *rect, GREEN);
+        draw_filled_rect_mut(canvas, (*rect).into(), GREEN);
     }
     for rect in &partial_timing_marks.bottom_rects {
-        draw_filled_rect_mut(canvas, *rect, BLUE);
+        draw_filled_rect_mut(canvas, (*rect).into(), BLUE);
     }
     for rect in &partial_timing_marks.left_rects {
-        draw_filled_rect_mut(canvas, *rect, RED);
+        draw_filled_rect_mut(canvas, (*rect).into(), RED);
     }
     for rect in &partial_timing_marks.right_rects {
-        draw_filled_rect_mut(canvas, *rect, CYAN);
+        draw_filled_rect_mut(canvas, (*rect).into(), CYAN);
     }
 
     if let Some(top_left_corner) = partial_timing_marks.top_left_rect {
-        draw_filled_rect_mut(canvas, top_left_corner, PINK);
+        draw_filled_rect_mut(canvas, top_left_corner.into(), PINK);
     }
 
     if let Some(top_right_corner) = partial_timing_marks.top_right_rect {
-        draw_filled_rect_mut(canvas, top_right_corner, PINK);
+        draw_filled_rect_mut(canvas, top_right_corner.into(), PINK);
     }
 
     if let Some(bottom_left_corner) = partial_timing_marks.bottom_left_rect {
-        draw_filled_rect_mut(canvas, bottom_left_corner, PINK);
+        draw_filled_rect_mut(canvas, bottom_left_corner.into(), PINK);
     }
 
     if let Some(bottom_right_corner) = partial_timing_marks.bottom_right_rect {
-        draw_filled_rect_mut(canvas, bottom_right_corner, PINK);
+        draw_filled_rect_mut(canvas, bottom_right_corner.into(), PINK);
     }
 
     draw_cross_mut(
@@ -329,10 +326,14 @@ pub fn draw_scored_oval_marks_debug_image_mut(
 
             draw_hollow_rect_mut(
                 canvas,
-                scored_oval_mark.original_bounds,
+                scored_oval_mark.original_bounds.into(),
                 original_oval_color,
             );
-            draw_hollow_rect_mut(canvas, scored_oval_mark.matched_bounds, matched_oval_color);
+            draw_hollow_rect_mut(
+                canvas,
+                scored_oval_mark.matched_bounds.into(),
+                matched_oval_color,
+            );
         }
     }
 }
@@ -353,7 +354,7 @@ fn draw_text_with_background_mut(
 
     draw_filled_rect_mut(
         canvas,
-        Rect::at(x, y).of_size(text_width as u32, text_height as u32),
+        imageproc::rect::Rect::at(x, y).of_size(text_width as u32, text_height as u32),
         background_color,
     );
     draw_text_mut(canvas, text_color, x, y, scale, font, text);
@@ -395,17 +396,14 @@ impl ImageDebugWriter {
     }
 
     pub fn write(&self, label: &str, draw: impl FnOnce(&mut RgbImage)) -> Option<PathBuf> {
-        match &self.input_image {
-            Some(input_image) => {
-                let mut output_image = DynamicImage::ImageLuma8(input_image.clone()).into_rgb8();
-                draw(&mut output_image);
+        self.input_image.as_ref().map(|input_image| {
+            let mut output_image = DynamicImage::ImageLuma8(input_image.clone()).into_rgb8();
+            draw(&mut output_image);
 
-                let output_path = output_path_from_original(&self.input_path, label);
-                output_image.save(&output_path).expect("image is saved");
-                Some(output_path)
-            }
-            None => None,
-        }
+            let output_path = output_path_from_original(&self.input_path, label);
+            output_image.save(&output_path).expect("image is saved");
+            output_path
+        })
     }
 }
 

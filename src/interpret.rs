@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use image::GrayImage;
-use imageproc::rect::Rect;
 use logging_timer::time;
+use serde::Serialize;
 
 use crate::ballot_card::get_scanned_ballot_card_geometry;
 use crate::ballot_card::BallotSide;
@@ -10,9 +10,11 @@ use crate::ballot_card::Geometry;
 use crate::debug::ImageDebugWriter;
 use crate::election::BallotStyleId;
 use crate::election::Election;
+use crate::geometry::Rect;
+use crate::geometry::Size;
 use crate::image_utils::size_image_to_fit;
-use crate::metadata::BallotCardMetadata;
-use crate::metadata::BallotCardMetadataError;
+use crate::metadata::BallotPageMetadata;
+use crate::metadata::BallotPageMetadataError;
 use crate::timing_marks::find_timing_mark_grid;
 use crate::timing_marks::{score_oval_marks_from_grid_layout, ScoredOvalMarks, TimingMarkGrid};
 
@@ -27,17 +29,48 @@ pub type LoadedBallotPage = (GrayImage, Geometry);
 pub type LoadedBallotCard = (GrayImage, GrayImage, Geometry);
 
 pub type InterpretedBallotPage = (TimingMarkGrid, ScoredOvalMarks);
-pub type Result = core::result::Result<(InterpretedBallotPage, InterpretedBallotPage), Error>;
+#[derive(Debug, Serialize)]
+pub struct InterpretedBallotCard {
+    pub front: InterpretedBallotPage,
+    pub back: InterpretedBallotPage,
+}
+pub type Result = core::result::Result<InterpretedBallotCard, Error>;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+pub struct BallotPagePathAndGeometry {
+    pub path: String,
+    pub geometry: Geometry,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
 pub enum Error {
-    ImageOpenFailure(PathBuf),
-    InvalidCardMetadata(BallotCardMetadata, BallotCardMetadata),
-    InvalidMetadata(PathBuf, BallotCardMetadataError),
-    MismatchedBallotCardGeometries((PathBuf, Geometry), (PathBuf, Geometry)),
-    MissingGridLayout(BallotCardMetadata, BallotCardMetadata),
-    MissingTimingMarks(Vec<Rect>),
-    UnexpectedDimensions(PathBuf, (u32, u32)),
+    ImageOpenFailure {
+        path: String,
+    },
+    InvalidCardMetadata {
+        side_a: BallotPageMetadata,
+        side_b: BallotPageMetadata,
+    },
+    InvalidMetadata {
+        path: String,
+        error: BallotPageMetadataError,
+    },
+    MismatchedBallotCardGeometries {
+        side_a: BallotPagePathAndGeometry,
+        side_b: BallotPagePathAndGeometry,
+    },
+    MissingGridLayout {
+        front: BallotPageMetadata,
+        back: BallotPageMetadata,
+    },
+    MissingTimingMarks {
+        rects: Vec<Rect>,
+    },
+    UnexpectedDimensions {
+        path: String,
+        dimensions: Size<u32>,
+    },
 }
 
 #[time]
@@ -55,10 +88,16 @@ fn load_ballot_card_images(
     let (side_b_image, side_b_geometry) = side_b_result?;
 
     if side_a_geometry != side_b_geometry {
-        return Err(Error::MismatchedBallotCardGeometries(
-            (side_a_path.to_path_buf(), side_a_geometry),
-            (side_b_path.to_path_buf(), side_b_geometry),
-        ));
+        return Err(Error::MismatchedBallotCardGeometries {
+            side_a: BallotPagePathAndGeometry {
+                path: side_a_path.to_str().unwrap_or_default().to_string(),
+                geometry: side_a_geometry,
+            },
+            side_b: BallotPagePathAndGeometry {
+                path: side_b_path.to_str().unwrap_or_default().to_string(),
+                geometry: side_b_geometry,
+            },
+        });
     }
 
     Ok((side_a_image, side_b_image, side_a_geometry))
@@ -68,16 +107,21 @@ fn load_ballot_card_images(
 pub fn load_ballot_page_image(image_path: &Path) -> core::result::Result<LoadedBallotPage, Error> {
     let img = match image::open(image_path) {
         Ok(img) => img.into_luma8(),
-        Err(_) => return Err(Error::ImageOpenFailure(image_path.to_path_buf())),
+        Err(_) => {
+            return Err(Error::ImageOpenFailure {
+                path: image_path.to_str().unwrap_or_default().to_string(),
+            })
+        }
     };
 
     let geometry = match get_scanned_ballot_card_geometry(img.dimensions()) {
         Some(geometry) => geometry,
         None => {
-            return Err(Error::UnexpectedDimensions(
-                image_path.to_path_buf(),
-                img.dimensions(),
-            ))
+            let (width, height) = img.dimensions();
+            return Err(Error::UnexpectedDimensions {
+                path: image_path.to_str().unwrap_or_default().to_string(),
+                dimensions: Size { width, height },
+            });
         }
     };
 
@@ -115,27 +159,27 @@ pub fn interpret_ballot_card(side_a_path: &Path, side_b_path: &Path, options: &O
 
     let ((front_image, front_grid, front_debug), (back_image, back_grid, back_debug)) =
         match (&side_a_grid.metadata, &side_b_grid.metadata) {
-            (BallotCardMetadata::Front(_), BallotCardMetadata::Back(_)) => (
+            (BallotPageMetadata::Front(_), BallotPageMetadata::Back(_)) => (
                 (side_a_image, side_a_grid, side_a_debug),
                 (side_b_image, side_b_grid, side_b_debug),
             ),
-            (BallotCardMetadata::Back(_), BallotCardMetadata::Front(_)) => (
+            (BallotPageMetadata::Back(_), BallotPageMetadata::Front(_)) => (
                 (side_b_image, side_b_grid, side_b_debug),
                 (side_a_image, side_a_grid, side_a_debug),
             ),
             _ => {
-                return Err(Error::InvalidCardMetadata(
-                    side_a_grid.metadata,
-                    side_b_grid.metadata,
-                ))
+                return Err(Error::InvalidCardMetadata {
+                    side_a: side_a_grid.metadata,
+                    side_b: side_b_grid.metadata,
+                })
             }
         };
 
     let ballot_style_id = match &front_grid.metadata {
-        BallotCardMetadata::Front(metadata) => {
+        BallotPageMetadata::Front(metadata) => {
             BallotStyleId::from(format!("card-number-{}", metadata.card_number))
         }
-        BallotCardMetadata::Back(_) => unreachable!(),
+        BallotPageMetadata::Back(_) => unreachable!(),
     };
 
     // TODO: discover this from the ballot card metadata
@@ -147,10 +191,10 @@ pub fn interpret_ballot_card(side_a_path: &Path, side_b_path: &Path, options: &O
     {
         Some(layout) => layout,
         None => {
-            return Err(Error::MissingGridLayout(
-                front_grid.metadata,
-                back_grid.metadata,
-            ))
+            return Err(Error::MissingGridLayout {
+                front: front_grid.metadata,
+                back: back_grid.metadata,
+            })
         }
     };
 
@@ -177,8 +221,8 @@ pub fn interpret_ballot_card(side_a_path: &Path, side_b_path: &Path, options: &O
         },
     );
 
-    Ok((
-        (front_grid, front_scored_oval_marks),
-        (back_grid, back_scored_oval_marks),
-    ))
+    Ok(InterpretedBallotCard {
+        front: (front_grid, front_scored_oval_marks),
+        back: (back_grid, back_scored_oval_marks),
+    })
 }

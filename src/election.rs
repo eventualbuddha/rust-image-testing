@@ -80,7 +80,7 @@ impl GridPosition {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct GridLocation {
     pub side: BallotSide,
     pub column: u32,

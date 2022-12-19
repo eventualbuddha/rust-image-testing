@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::exit;
 
 use clap::{arg, command, Command};
+use serde::Serialize;
 
 use crate::ballot_card::load_oval_template;
 use crate::election::Election;
@@ -21,7 +22,14 @@ mod metadata;
 mod timing_marks;
 mod types;
 
-fn main() {
+#[derive(Debug, Serialize)]
+enum Error {
+    InvalidElectionDefinition { message: String },
+    OvalTemplateReadFailure { message: String },
+    InterpretError(crate::interpret::Error),
+}
+
+fn try_main() -> Result<(), Error> {
     pretty_env_logger::init_custom_env("LOG");
 
     let matches = cli().get_matches();
@@ -39,8 +47,9 @@ fn main() {
     let election_definition_json = match std::fs::read_to_string(election_definition_path) {
         Ok(json) => json,
         Err(e) => {
-            eprintln!("Error reading election definition: {}", e);
-            exit(1);
+            return Err(Error::InvalidElectionDefinition {
+                message: format!("Error reading election definition: {}", e),
+            });
         }
     };
 
@@ -48,18 +57,20 @@ fn main() {
     let election: Election = match serde_json::from_str(&election_definition_json) {
         Ok(election_definition) => election_definition,
         Err(e) => {
-            eprintln!("Error parsing election definition: {}", e);
-            exit(1);
+            return Err(Error::InvalidElectionDefinition {
+                message: format!("Error parsing election definition: {}", e),
+            });
         }
     };
 
-    let oval_template = load_oval_template().map_or_else(
-        || {
-            eprintln!("Error loading oval template");
-            exit(1);
-        },
-        |image| image,
-    );
+    let oval_template = match load_oval_template() {
+        Some(template) => template,
+        None => {
+            return Err(Error::OvalTemplateReadFailure {
+                message: "Error loading oval template".to_string(),
+            });
+        }
+    };
 
     let options = Options {
         debug,
@@ -67,15 +78,37 @@ fn main() {
         election,
     };
 
-    match interpret_ballot_card(Path::new(&side_a_path), Path::new(&side_b_path), &options) {
-        Ok((front, back)) => {
-            println!("Front: {:?}", front);
-            println!("Back: {:?}", back);
-        }
+    let card =
+        match interpret_ballot_card(Path::new(&side_a_path), Path::new(&side_b_path), &options) {
+            Ok(card) => card,
+            Err(error) => {
+                return Err(Error::InterpretError(error));
+            }
+        };
+
+    // use serde_json to serialize the ballot card to JSON
+    let card_json = match serde_json::to_string_pretty(&card) {
+        Ok(json) => json,
         Err(e) => {
-            eprintln!("Error: {:?}", e);
+            eprintln!("Error serializing ballot card: {}", e);
             exit(1);
         }
+    };
+
+    println!("{}", card_json);
+    Ok(())
+}
+
+fn main() {
+    match try_main() {
+        Err(error) => {
+            eprintln!(
+                "{}",
+                serde_json::to_string_pretty(&error).expect("Error serializing error")
+            );
+            exit(1);
+        }
+        Ok(()) => {}
     }
 }
 

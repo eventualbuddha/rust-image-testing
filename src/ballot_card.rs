@@ -1,28 +1,22 @@
-use std::io;
+use std::{fmt::Debug, hash::Hash, io};
 
 use image::{GrayImage, Luma};
-use imageproc::{
-    contrast::{otsu_level, threshold},
-    rect::Rect,
-};
+use imageproc::contrast::{otsu_level, threshold};
 use logging_timer::time;
 use serde::{Deserialize, Serialize};
 
-use crate::image_utils::bleed;
+use crate::{
+    geometry::{Rect, Size},
+    image_utils::bleed,
+};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum BallotPaperSize {
     Letter,
     Legal,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Size<T> {
-    pub width: T,
-    pub height: T,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize)]
 pub struct Geometry {
     pub ballot_paper_size: BallotPaperSize,
     pub pixels_per_inch: u32,
@@ -77,7 +71,7 @@ impl Serialize for BallotSide {
     }
 }
 
-pub fn get_scanned_ballot_card_geometry_8pt5x11() -> Geometry {
+pub const fn get_scanned_ballot_card_geometry_8pt5x11() -> Geometry {
     Geometry {
         ballot_paper_size: BallotPaperSize::Letter,
         pixels_per_inch: 200,
@@ -85,7 +79,7 @@ pub fn get_scanned_ballot_card_geometry_8pt5x11() -> Geometry {
             width: 1696,
             height: 2200,
         },
-        content_area: Rect::at(0, 0).of_size(1696, 2200),
+        content_area: Rect::new(0, 0, 1696, 2200),
         oval_size: Size {
             width: 40,
             height: 26,
@@ -98,12 +92,12 @@ pub fn get_scanned_ballot_card_geometry_8pt5x11() -> Geometry {
             width: 34,
             height: 41,
         },
-        front_usable_area: Rect::at(0, 0).of_size(34, 41),
-        back_usable_area: Rect::at(0, 0).of_size(34, 41),
+        front_usable_area: Rect::new(0, 0, 34, 41),
+        back_usable_area: Rect::new(0, 0, 34, 41),
     }
 }
 
-pub fn get_scanned_ballot_card_geometry_8pt5x14() -> Geometry {
+pub const fn get_scanned_ballot_card_geometry_8pt5x14() -> Geometry {
     Geometry {
         ballot_paper_size: BallotPaperSize::Legal,
         pixels_per_inch: 200,
@@ -111,7 +105,7 @@ pub fn get_scanned_ballot_card_geometry_8pt5x14() -> Geometry {
             width: 1696,
             height: 2800,
         },
-        content_area: Rect::at(0, 0).of_size(1696, 2800),
+        content_area: Rect::new(0, 0, 1696, 2800),
         oval_size: Size {
             width: 40,
             height: 26,
@@ -124,8 +118,8 @@ pub fn get_scanned_ballot_card_geometry_8pt5x14() -> Geometry {
             width: 34,
             height: 53,
         },
-        front_usable_area: Rect::at(0, 0).of_size(34, 53),
-        back_usable_area: Rect::at(0, 0).of_size(34, 53),
+        front_usable_area: Rect::new(0, 0, 34, 53),
+        back_usable_area: Rect::new(0, 0, 34, 53),
     }
 }
 

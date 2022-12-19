@@ -8,24 +8,25 @@ use image::{GenericImageView, GrayImage};
 use imageproc::{
     contours::{find_contours_with_threshold, BorderType, Contour},
     contrast::otsu_level,
-    point::Point,
-    rect::Rect,
 };
 use logging_timer::time;
+use serde::Serialize;
 
 use crate::{
     ballot_card::{BallotSide, Geometry},
     debug,
     debug::ImageDebugWriter,
     election::{GridLayout, GridLocation, GridPosition},
-    geometry::{center_of_rect, find_best_line_through_items, intersection_of_lines, Segment},
+    geometry::{
+        center_of_rect, find_best_line_through_items, intersection_of_lines, Point, Rect, Segment,
+    },
     image_utils::{diff, ratio, BLACK, WHITE},
     interpret::Error,
-    metadata::{decode_metadata_from_timing_marks, BallotCardMetadata},
+    metadata::{decode_metadata_from_timing_marks, BallotPageMetadata},
 };
 
 /// Represents partial timing marks found in a ballot card.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Partial {
     pub geometry: Geometry,
     pub top_left_corner: Point<f32>,
@@ -62,7 +63,7 @@ impl From<Complete> for Partial {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Complete {
     pub geometry: Geometry,
     pub top_left_corner: Point<f32>,
@@ -81,7 +82,7 @@ pub struct Complete {
 
 /// Represents a grid of timing marks and provides access to the location of
 /// ovals in the grid.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct TimingMarkGrid {
     /// The geometry of the ballot card.
     pub geometry: Geometry,
@@ -96,7 +97,7 @@ pub struct TimingMarkGrid {
     pub candidate_timing_marks: Vec<Rect>,
 
     /// Metadata from the ballot card bottom timing marks.
-    pub metadata: BallotCardMetadata,
+    pub metadata: BallotPageMetadata,
 }
 
 impl TimingMarkGrid {
@@ -105,7 +106,7 @@ impl TimingMarkGrid {
         partial_timing_marks: Partial,
         complete_timing_marks: Complete,
         candidate_timing_marks: Vec<Rect>,
-        metadata: BallotCardMetadata,
+        metadata: BallotPageMetadata,
     ) -> Self {
         Self {
             geometry,
@@ -162,7 +163,11 @@ pub fn find_timing_mark_grid(
         debug,
     ) {
         Some(partial_timing_marks) => partial_timing_marks,
-        None => return Err(Error::MissingTimingMarks(candidate_timing_marks)),
+        None => {
+            return Err(Error::MissingTimingMarks {
+                rects: candidate_timing_marks,
+            })
+        }
     };
 
     let complete_timing_marks = match find_complete_timing_marks_from_partial_timing_marks(
@@ -171,13 +176,22 @@ pub fn find_timing_mark_grid(
         debug,
     ) {
         Some(complete_timing_marks) => complete_timing_marks,
-        None => return Err(Error::MissingTimingMarks(candidate_timing_marks)),
+        None => {
+            return Err(Error::MissingTimingMarks {
+                rects: candidate_timing_marks,
+            })
+        }
     };
 
     let metadata =
         match decode_metadata_from_timing_marks(&partial_timing_marks, &complete_timing_marks) {
             Ok(metadata) => metadata,
-            Err(err) => return Err(Error::InvalidMetadata(image_path.to_path_buf(), err)),
+            Err(error) => {
+                return Err(Error::InvalidMetadata {
+                    path: image_path.to_str().unwrap_or_default().to_string(),
+                    error,
+                })
+            }
         };
 
     let timing_mark_grid = TimingMarkGrid::new(
@@ -222,7 +236,12 @@ fn get_contour_bounding_rect(contour: &Contour<u32>) -> Rect {
     let max_x = contour.points.iter().map(|p| p.x).max().unwrap_or(0);
     let min_y = contour.points.iter().map(|p| p.y).min().unwrap_or(0);
     let max_y = contour.points.iter().map(|p| p.y).max().unwrap_or(0);
-    Rect::at(min_x as i32, min_y as i32).of_size(max_x - min_x + 1, max_y - min_y + 1)
+    Rect::new(
+        min_x as i32,
+        min_y as i32,
+        max_x - min_x + 1,
+        max_y - min_y + 1,
+    )
 }
 
 #[time]
@@ -540,18 +559,14 @@ fn infer_missing_timing_marks_on_segment(
             current_timing_mark_center = center_of_rect(closest_rect) + next_point_vector;
         } else {
             // otherwise, we need to fill in a point
-            inferred_timing_marks.push(
-                Rect::at(
-                    (current_timing_mark_center.x - geometry.timing_mark_size.width / 2.0).round()
-                        as i32,
-                    (current_timing_mark_center.y - geometry.timing_mark_size.height / 2.0).round()
-                        as i32,
-                )
-                .of_size(
-                    geometry.timing_mark_size.width.round() as u32,
-                    geometry.timing_mark_size.height.round() as u32,
-                ),
-            );
+            inferred_timing_marks.push(Rect::new(
+                (current_timing_mark_center.x - geometry.timing_mark_size.width / 2.0).round()
+                    as i32,
+                (current_timing_mark_center.y - geometry.timing_mark_size.height / 2.0).round()
+                    as i32,
+                geometry.timing_mark_size.width.round() as u32,
+                geometry.timing_mark_size.height.round() as u32,
+            ));
             current_timing_mark_center += next_point_vector;
         }
     }
@@ -580,6 +595,7 @@ pub fn distances_between_rects(rects: &[Rect]) -> Vec<f32> {
     distances
 }
 
+#[derive(Clone, Serialize)]
 pub struct OvalMarkScore(pub f32);
 
 impl Display for OvalMarkScore {
@@ -606,15 +622,45 @@ impl PartialOrd for OvalMarkScore {
     }
 }
 
+#[derive(Clone, Serialize)]
 pub struct ScoredOvalMark {
+    /// The location of the oval mark in the grid. Uses side/column/row, not
+    /// x/y.
     pub location: GridLocation,
+
+    /// The score for the match between the source image and the template. This
+    /// is the highest value found when looking around `original_bounds` for the
+    /// oval. 100% is a perfect match.
     pub match_score: OvalMarkScore,
+
+    /// The score for the fill of the oval at `matched_bounds`. 100% is
+    /// perfectly filled.
     pub fill_score: OvalMarkScore,
+
+    /// The expected bounds of the oval mark in the scanned source image.
     pub original_bounds: Rect,
+
+    /// The bounds of the oval mark in the scanned source image that was
+    /// determined to be the best match.
     pub matched_bounds: Rect,
+
+    /// The cropped source image at `matched_bounds`.
+    #[serde(skip_serializing)]
     pub source_image: GrayImage,
+
+    /// The cropped source image at `matched_bounds` with each pixel binarized
+    /// to either 0 (black) or 255 (white).
+    #[serde(skip_serializing)]
     pub binarized_source_image: GrayImage,
+
+    /// A binarized diff image of `binarized_source_image` with the template.
+    /// The more white pixels, the better the match.
+    #[serde(skip_serializing)]
     pub match_diff_image: GrayImage,
+
+    /// A binarized diff image of `binarized_source_image` with the fill of the
+    /// template. The more black pixels, the better the fill.
+    #[serde(skip_serializing)]
     pub fill_diff_image: GrayImage,
 }
 
@@ -691,7 +737,7 @@ pub fn score_oval_mark(
     let top = center_y - oval_template.height() / 2;
     let width = oval_template.width();
     let height = oval_template.height();
-    let original_bounds = Rect::at(left as i32, top as i32).of_size(width, height);
+    let original_bounds = Rect::new(left as i32, top as i32, width, height);
     let mut best_match_score = OvalMarkScore(f32::NEG_INFINITY);
     let mut best_match_bounds: Option<Rect> = None;
     let mut best_match_diff: Option<GrayImage> = None;
@@ -716,7 +762,7 @@ pub fn score_oval_mark(
 
             if match_score > best_match_score {
                 best_match_score = match_score;
-                best_match_bounds = Some(Rect::at(x, y).of_size(width, oval_template.height()));
+                best_match_bounds = Some(Rect::new(x, y, width, oval_template.height()));
                 best_match_diff = Some(match_diff);
             }
         }
