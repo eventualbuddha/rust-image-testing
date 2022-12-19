@@ -279,17 +279,17 @@ pub fn draw_scored_oval_marks_debug_image_mut(
                 canvas,
                 &option_text,
                 scored_oval_mark
-                    .original_bounds
+                    .expected_bounds
                     .left()
                     .min(scored_oval_mark.matched_bounds.left())
                     - option_text_width as i32
                     - 5,
                 (scored_oval_mark
-                    .original_bounds
+                    .expected_bounds
                     .top()
                     .min(scored_oval_mark.matched_bounds.top())
                     + scored_oval_mark
-                        .original_bounds
+                        .expected_bounds
                         .bottom()
                         .max(scored_oval_mark.matched_bounds.bottom())) as i32
                     / 2
@@ -304,17 +304,17 @@ pub fn draw_scored_oval_marks_debug_image_mut(
                 canvas,
                 &score_text,
                 (scored_oval_mark
-                    .original_bounds
+                    .expected_bounds
                     .left()
                     .min(scored_oval_mark.matched_bounds.left())
                     + scored_oval_mark
-                        .original_bounds
+                        .expected_bounds
                         .right()
                         .max(scored_oval_mark.matched_bounds.right())) as i32
                     / 2
                     - (score_text_width as i32 / 2),
                 scored_oval_mark
-                    .original_bounds
+                    .expected_bounds
                     .bottom()
                     .max(scored_oval_mark.matched_bounds.bottom()) as i32
                     + 5,
@@ -326,7 +326,7 @@ pub fn draw_scored_oval_marks_debug_image_mut(
 
             draw_hollow_rect_mut(
                 canvas,
-                scored_oval_mark.original_bounds.into(),
+                scored_oval_mark.expected_bounds.into(),
                 original_oval_color,
             );
             draw_hollow_rect_mut(

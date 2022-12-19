@@ -629,7 +629,7 @@ pub struct ScoredOvalMark {
     pub location: GridLocation,
 
     /// The score for the match between the source image and the template. This
-    /// is the highest value found when looking around `original_bounds` for the
+    /// is the highest value found when looking around `expected_bounds` for the
     /// oval. 100% is a perfect match.
     pub match_score: OvalMarkScore,
 
@@ -638,7 +638,7 @@ pub struct ScoredOvalMark {
     pub fill_score: OvalMarkScore,
 
     /// The expected bounds of the oval mark in the scanned source image.
-    pub original_bounds: Rect,
+    pub expected_bounds: Rect,
 
     /// The bounds of the oval mark in the scanned source image that was
     /// determined to be the best match.
@@ -737,7 +737,7 @@ pub fn score_oval_mark(
     let top = center_y - oval_template.height() / 2;
     let width = oval_template.width();
     let height = oval_template.height();
-    let original_bounds = Rect::new(left as i32, top as i32, width, height);
+    let expected_bounds = Rect::new(left as i32, top as i32, width, height);
     let mut best_match_score = OvalMarkScore(f32::NEG_INFINITY);
     let mut best_match_bounds: Option<Rect> = None;
     let mut best_match_diff: Option<GrayImage> = None;
@@ -787,7 +787,7 @@ pub fn score_oval_mark(
         location: *location,
         match_score: best_match_score,
         fill_score,
-        original_bounds,
+        expected_bounds,
         matched_bounds: best_match_bounds,
         source_image,
         binarized_source_image,
