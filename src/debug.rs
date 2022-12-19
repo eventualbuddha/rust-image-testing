@@ -5,6 +5,7 @@ use imageproc::drawing::{
     draw_cross_mut, draw_filled_rect_mut, draw_hollow_rect_mut, draw_line_segment_mut,
     draw_text_mut, text_size,
 };
+use log::debug;
 use rusttype::{Font, Scale};
 
 use crate::{
@@ -402,6 +403,7 @@ impl ImageDebugWriter {
 
             let output_path = output_path_from_original(&self.input_path, label);
             output_image.save(&output_path).expect("image is saved");
+            debug!("{}", output_path.display());
             output_path
         })
     }
