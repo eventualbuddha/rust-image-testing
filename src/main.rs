@@ -26,10 +26,10 @@ mod types;
 enum Error {
     InvalidElectionDefinition { message: String },
     OvalTemplateReadFailure { message: String },
-    InterpretError(crate::interpret::Error),
+    InterpretFailure(crate::interpret::Error),
 }
 
-fn try_main() -> Result<(), Error> {
+fn try_main() -> Result<(), Box<Error>> {
     pretty_env_logger::init_custom_env("LOG");
 
     let matches = cli().get_matches();
@@ -47,9 +47,9 @@ fn try_main() -> Result<(), Error> {
     let election_definition_json = match std::fs::read_to_string(election_definition_path) {
         Ok(json) => json,
         Err(e) => {
-            return Err(Error::InvalidElectionDefinition {
+            return Err(Box::new(Error::InvalidElectionDefinition {
                 message: format!("Error reading election definition: {}", e),
-            });
+            }));
         }
     };
 
@@ -57,18 +57,18 @@ fn try_main() -> Result<(), Error> {
     let election: Election = match serde_json::from_str(&election_definition_json) {
         Ok(election_definition) => election_definition,
         Err(e) => {
-            return Err(Error::InvalidElectionDefinition {
+            return Err(Box::new(Error::InvalidElectionDefinition {
                 message: format!("Error parsing election definition: {}", e),
-            });
+            }));
         }
     };
 
     let oval_template = match load_oval_template() {
         Some(template) => template,
         None => {
-            return Err(Error::OvalTemplateReadFailure {
+            return Err(Box::new(Error::OvalTemplateReadFailure {
                 message: "Error loading oval template".to_string(),
-            });
+            }));
         }
     };
 
@@ -82,7 +82,7 @@ fn try_main() -> Result<(), Error> {
         match interpret_ballot_card(Path::new(&side_a_path), Path::new(&side_b_path), &options) {
             Ok(card) => card,
             Err(error) => {
-                return Err(Error::InterpretError(error));
+                return Err(Box::new(Error::InterpretFailure(error)));
             }
         };
 
@@ -100,15 +100,12 @@ fn try_main() -> Result<(), Error> {
 }
 
 fn main() {
-    match try_main() {
-        Err(error) => {
-            eprintln!(
-                "{}",
-                serde_json::to_string_pretty(&error).expect("Error serializing error")
-            );
-            exit(1);
-        }
-        Ok(()) => {}
+    if let Err(error) = try_main() {
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&error).expect("Error serializing error")
+        );
+        exit(1);
     }
 }
 

@@ -114,15 +114,14 @@ pub fn load_ballot_page_image(image_path: &Path) -> core::result::Result<LoadedB
         }
     };
 
-    let geometry = match get_scanned_ballot_card_geometry(img.dimensions()) {
-        Some(geometry) => geometry,
-        None => {
-            let (width, height) = img.dimensions();
-            return Err(Error::UnexpectedDimensions {
-                path: image_path.to_str().unwrap_or_default().to_string(),
-                dimensions: Size { width, height },
-            });
-        }
+    let geometry = if let Some(geometry) = get_scanned_ballot_card_geometry(img.dimensions()) {
+        geometry
+    } else {
+        let (width, height) = img.dimensions();
+        return Err(Error::UnexpectedDimensions {
+            path: image_path.to_str().unwrap_or_default().to_string(),
+            dimensions: Size { width, height },
+        });
     };
 
     let img = size_image_to_fit(
