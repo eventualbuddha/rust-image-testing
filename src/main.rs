@@ -27,6 +27,7 @@ enum Error {
     InvalidElectionDefinition { message: String },
     OvalTemplateReadFailure { message: String },
     InterpretFailure(crate::interpret::Error),
+    SerializationFailure { message: String },
 }
 
 fn try_main() -> Result<(), Box<Error>> {
@@ -89,9 +90,10 @@ fn try_main() -> Result<(), Box<Error>> {
     // use serde_json to serialize the ballot card to JSON
     let card_json = match serde_json::to_string_pretty(&card) {
         Ok(json) => json,
-        Err(e) => {
-            eprintln!("Error serializing ballot card: {}", e);
-            exit(1);
+        Err(error) => {
+            return Err(Box::new(Error::SerializationFailure {
+                message: format!("Error serializing ballot card: {}", error),
+            }));
         }
     };
 
@@ -101,7 +103,7 @@ fn try_main() -> Result<(), Box<Error>> {
 
 fn main() {
     if let Err(error) = try_main() {
-        eprintln!(
+        println!(
             "{}",
             serde_json::to_string_pretty(&error).expect("Error serializing error")
         );
