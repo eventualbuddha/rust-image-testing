@@ -12,11 +12,14 @@ use crate::{
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum BallotPaperSize {
+    #[serde(rename = "letter")]
     Letter,
+    #[serde(rename = "legal")]
     Legal,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Geometry {
     pub ballot_paper_size: BallotPaperSize,
     pub pixels_per_inch: u32,

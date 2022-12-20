@@ -25,6 +25,7 @@ fn print_boolean_slice_as_binary(slice: &[bool]) -> String {
 
 /// Metadata encoded by the bottom row of the front of a ballot card.
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BallotPageMetadataFront {
     /// Raw bits 0-31 in LSB-MSB order (right to left).
     pub bits: [bool; METADATA_BITS],
@@ -67,8 +68,34 @@ impl Debug for BallotPageMetadataFront {
     }
 }
 
+/// Represents a single capital letter from A-Z represented by a u8 index.
+#[derive(Clone, Debug)]
+pub struct IndexedCapitalLetter(u8);
+
+impl From<u8> for IndexedCapitalLetter {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl IndexedCapitalLetter {
+    pub fn to_char(&self) -> char {
+        char::from(b'A' + self.0)
+    }
+}
+
+impl Serialize for IndexedCapitalLetter {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_char(self.to_char())
+    }
+}
+
 /// Metadata encoded by the bottom row of the back of a ballot card.
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BallotPageMetadataBack {
     /// Raw bits 0-31 in LSB-MSB order (right-to-left).
     pub bits: [bool; METADATA_BITS],
@@ -85,7 +112,7 @@ pub struct BallotPageMetadataBack {
     /// Election type from bits 16-20 (5 bits).
     ///
     /// @example "G" for general election
-    pub election_type: u8,
+    pub election_type: IndexedCapitalLetter,
 
     /// Ender code (binary 01111011110) from bits 21-31 (11 bits).
     pub ender_code: [bool; 11],
@@ -115,12 +142,14 @@ impl Debug for BallotPageMetadataBack {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "side", rename_all = "camelCase")]
 pub enum BallotPageMetadata {
     Front(BallotPageMetadataFront),
     Back(BallotPageMetadataBack),
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum BallotPageMetadataError {
     ValueOutOfRange {
         field: String,
@@ -129,8 +158,12 @@ pub enum BallotPageMetadataError {
         max: u32,
         metadata: BallotPageMetadata,
     },
-    InvalidChecksum(BallotPageMetadataFront),
-    InvalidEnderCode(BallotPageMetadataBack),
+    InvalidChecksum {
+        metadata: BallotPageMetadataFront,
+    },
+    InvalidEnderCode {
+        metadata: BallotPageMetadataBack,
+    },
     InvalidTimingMarkCount {
         expected: usize,
         actual: usize,
@@ -141,6 +174,7 @@ pub enum BallotPageMetadataError {
     },
 }
 
+/// Computes the metadata bits from the bottom row of a ballot page.
 pub fn compute_bits_from_bottom_timing_marks(
     partial_timing_marks: &[Rect],
     complete_timing_marks: &[Rect],
@@ -191,6 +225,7 @@ pub fn compute_bits_from_bottom_timing_marks(
     Ok(bits)
 }
 
+/// Decodes the metadata bits assuming it's the front page of a ballot card.
 pub fn decode_front_metadata_from_bits(
     bits_rtl: &[bool; METADATA_BITS],
 ) -> Result<BallotPageMetadataFront, BallotPageMetadataError> {
@@ -229,7 +264,9 @@ pub fn decode_front_metadata_from_bits(
     };
 
     if computed_mod_4_checksum != mod_4_checksum {
-        return Err(BallotPageMetadataError::InvalidChecksum(front_metadata));
+        return Err(BallotPageMetadataError::InvalidChecksum {
+            metadata: front_metadata,
+        });
     }
 
     if start_bit != 1 {
@@ -245,6 +282,7 @@ pub fn decode_front_metadata_from_bits(
     Ok(front_metadata)
 }
 
+/// Decodes the metadata bits assuming it's the back page of a ballot card.
 pub fn decode_back_metadata_from_bits(
     bits_rtl: &[bool; METADATA_BITS],
 ) -> Result<BallotPageMetadataBack, BallotPageMetadataError> {
@@ -263,10 +301,11 @@ pub fn decode_back_metadata_from_bits(
         .rev()
         .fold(0, |acc, &bit| (acc << 1) + u8::from(bit));
 
-    let election_type = bits_rtl[16..21]
+    let election_type: IndexedCapitalLetter = bits_rtl[16..21]
         .iter()
         .rev()
-        .fold(0, |acc, &bit| (acc << 1) + u8::from(bit));
+        .fold(0, |acc, &bit| (acc << 1) + u8::from(bit))
+        .into();
 
     let ender_code: [bool; 11] = bits_rtl[21..32]
         .try_into()
@@ -283,12 +322,17 @@ pub fn decode_back_metadata_from_bits(
     };
 
     if ender_code != ENDER_CODE {
-        return Err(BallotPageMetadataError::InvalidEnderCode(back_metadata));
+        return Err(BallotPageMetadataError::InvalidEnderCode {
+            metadata: back_metadata,
+        });
     }
 
     Ok(back_metadata)
 }
 
+/// Decodes the ballot page metadata from the timing marks. Uses the difference
+/// between the partial and complete timing marks to determine the metadata
+/// bits.
 pub fn decode_metadata_from_timing_marks(
     partial_timing_marks: &Partial,
     complete_timing_marks: &Complete,

@@ -27,6 +27,7 @@ use crate::{
 
 /// Represents partial timing marks found in a ballot card.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Partial {
     pub geometry: Geometry,
     pub top_left_corner: Point<f32>,
@@ -64,6 +65,7 @@ impl From<Complete> for Partial {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Complete {
     pub geometry: Geometry,
     pub top_left_corner: Point<f32>,
@@ -83,6 +85,7 @@ pub struct Complete {
 /// Represents a grid of timing marks and provides access to the location of
 /// ovals in the grid.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TimingMarkGrid {
     /// The geometry of the ballot card.
     pub geometry: Geometry,
@@ -129,7 +132,7 @@ impl TimingMarkGrid {
     ///   - (33, 50) is the bottom right corner of the grid
     ///   - (c, r) where 0 < c < 33 and 0 < r < 50 is the oval at column c and
     ///     row r
-    pub fn get(&self, column: u32, row: u32) -> Option<Point<f32>> {
+    pub fn point_for_location(&self, column: u32, row: u32) -> Option<Point<f32>> {
         if column >= self.geometry.grid_size.width || row >= self.geometry.grid_size.height {
             return None;
         }
@@ -148,6 +151,8 @@ impl TimingMarkGrid {
     }
 }
 
+/// Finds the timing marks in the given image and computes the grid of timing
+/// marks, i.e. the locations of all the possible ovals.
 #[time]
 pub fn find_timing_mark_grid(
     image_path: &Path,
@@ -209,6 +214,8 @@ pub fn find_timing_mark_grid(
     Ok(timing_mark_grid)
 }
 
+/// Determines if the given contour is rectangular. This is not an exact test,
+/// but it is a good approximation.
 fn is_contour_rectangular(contour: &Contour<u32>) -> bool {
     let rect = get_contour_bounding_rect(contour);
 
@@ -231,6 +238,8 @@ fn is_contour_rectangular(contour: &Contour<u32>) -> bool {
     rectangular_score < 1.0
 }
 
+/// Returns the bounding rectangle of the given contour such that the rectangle
+/// is the smallest rectangle that contains all of the points in the contour.
 fn get_contour_bounding_rect(contour: &Contour<u32>) -> Rect {
     let min_x = contour.points.iter().map(|p| p.x).min().unwrap_or(0);
     let max_x = contour.points.iter().map(|p| p.x).max().unwrap_or(0);
@@ -246,6 +255,8 @@ fn get_contour_bounding_rect(contour: &Contour<u32>) -> Rect {
 
 const BORDER_SIZE: u8 = 1;
 
+/// Looks for possible timing mark shapes in the image without trying to
+/// determine if they are actually timing marks.
 #[time]
 pub fn find_timing_mark_shapes(
     geometry: &Geometry,
@@ -646,6 +657,7 @@ impl PartialOrd for OvalMarkScore {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScoredOvalMark {
     /// The location of the oval mark in the grid. Uses side/column/row, not
     /// x/y.
@@ -720,7 +732,7 @@ pub fn score_oval_marks_from_grid_layout(
             continue;
         }
 
-        match timing_mark_grid.get(location.column, location.row) {
+        match timing_mark_grid.point_for_location(location.column, location.row) {
             Some(expected_oval_center) => {
                 scored_ovals.push((
                     grid_position.clone(),

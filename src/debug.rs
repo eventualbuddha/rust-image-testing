@@ -248,9 +248,9 @@ pub fn draw_timing_mark_grid_debug_image_mut(
     timing_mark_grid: &TimingMarkGrid,
     geometry: &Geometry,
 ) {
-    for x in 0..geometry.grid_size.width {
-        for y in 0..geometry.grid_size.height {
-            let point = timing_mark_grid.get(x, y).expect("grid point is defined");
+    for column in 0..geometry.grid_size.width {
+        for row in 0..geometry.grid_size.height {
+            let point = timing_mark_grid.point_for_location(column, row).expect("grid point is defined");
             draw_cross_mut(canvas, PINK, point.x.round() as i32, point.y.round() as i32);
         }
     }

@@ -28,7 +28,11 @@ pub struct Options {
 pub type LoadedBallotPage = (GrayImage, Geometry);
 pub type LoadedBallotCard = (GrayImage, GrayImage, Geometry);
 
-pub type InterpretedBallotPage = (TimingMarkGrid, ScoredOvalMarks);
+#[derive(Debug, Serialize)]
+pub struct InterpretedBallotPage {
+    grid: TimingMarkGrid,
+    marks: ScoredOvalMarks,
+}
 #[derive(Debug, Serialize)]
 pub struct InterpretedBallotCard {
     pub front: InterpretedBallotPage,
@@ -43,7 +47,7 @@ pub struct BallotPagePathAndGeometry {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum Error {
     ImageOpenFailure {
         path: String,
@@ -221,7 +225,13 @@ pub fn interpret_ballot_card(side_a_path: &Path, side_b_path: &Path, options: &O
     );
 
     Ok(InterpretedBallotCard {
-        front: (front_grid, front_scored_oval_marks),
-        back: (back_grid, back_scored_oval_marks),
+        front: InterpretedBallotPage {
+            grid: front_grid,
+            marks: front_scored_oval_marks,
+        },
+        back: InterpretedBallotPage {
+            grid: back_grid,
+            marks: back_scored_oval_marks,
+        },
     })
 }
