@@ -20,7 +20,7 @@ use crate::{
     geometry::{
         center_of_rect, find_best_line_through_items, intersection_of_lines, Point, Rect, Segment,
     },
-    image_utils::{diff, ratio, BLACK, WHITE},
+    image_utils::{diff, expand_image, ratio, BLACK, WHITE},
     interpret::Error,
     metadata::{decode_metadata_from_timing_marks, BallotPageMetadata},
 };
@@ -244,6 +244,8 @@ fn get_contour_bounding_rect(contour: &Contour<u32>) -> Rect {
     )
 }
 
+const BORDER_SIZE: u8 = 1;
+
 #[time]
 pub fn find_timing_mark_shapes(
     geometry: &Geometry,
@@ -251,13 +253,24 @@ pub fn find_timing_mark_shapes(
     debug: &ImageDebugWriter,
 ) -> Vec<Rect> {
     let threshold = otsu_level(img);
-    let contours = find_contours_with_threshold(img, threshold);
+
+    // `find_contours_with_threshold` does not consider timing marks on the edge
+    // of the image to be contours, so we expand the image and add whitespace
+    // around the edges to ensure no timing marks are on the edge of the image
+    let img = if let Ok(img) = expand_image(img, BORDER_SIZE.into(), WHITE) {
+        img
+    } else {
+        return vec![];
+    };
+
+    let contours = find_contours_with_threshold(&img, threshold);
     let candidate_timing_marks = contours
         .iter()
         .enumerate()
         .filter_map(|(i, contour)| {
             if contour.border_type == BorderType::Hole {
-                let contour_bounds = get_contour_bounding_rect(contour);
+                let contour_bounds = get_contour_bounding_rect(contour)
+                    .offset(-i32::from(BORDER_SIZE), -i32::from(BORDER_SIZE));
                 if rect_could_be_timing_mark(geometry, &contour_bounds)
                     && is_contour_rectangular(contour)
                     && contours.iter().all(|c| c.parent != Some(i))
@@ -267,10 +280,20 @@ pub fn find_timing_mark_shapes(
             }
             None
         })
-        .collect::<Vec<Rect>>();
+        .collect::<Vec<_>>();
 
     debug.write("candidate_timing_marks", |canvas| {
-        debug::draw_contour_rects_debug_image_mut(canvas, &candidate_timing_marks);
+        debug::draw_candidate_timing_marks_debug_image_mut(
+            canvas,
+            &contours
+                .iter()
+                .map(|c| {
+                    get_contour_bounding_rect(c)
+                        .offset(-i32::from(BORDER_SIZE), -i32::from(BORDER_SIZE))
+                })
+                .collect::<Vec<_>>(),
+            &candidate_timing_marks,
+        );
     });
 
     candidate_timing_marks

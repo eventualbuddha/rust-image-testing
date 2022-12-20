@@ -1,6 +1,6 @@
 use image::{
     imageops::{resize, FilterType::Lanczos3},
-    GrayImage, Luma, Rgb,
+    GenericImage, GrayImage, ImageError, Luma, Rgb,
 };
 use logging_timer::time;
 
@@ -110,4 +110,20 @@ pub fn size_image_to_fit(img: &GrayImage, max_width: u32, max_height: u32) -> Gr
         max_height
     };
     resize(img, new_width, new_height, Lanczos3)
+}
+
+/// Expands an image by the given number of pixels on all sides.
+#[time]
+pub fn expand_image(
+    img: &GrayImage,
+    border_size: u32,
+    background_color: Luma<u8>,
+) -> Result<GrayImage, ImageError> {
+    let mut out = GrayImage::new(
+        img.width() + border_size * 2,
+        img.height() + border_size * 2,
+    );
+    out.fill(background_color.0[0]);
+    out.copy_from(img, border_size, border_size)?;
+    Ok(out)
 }

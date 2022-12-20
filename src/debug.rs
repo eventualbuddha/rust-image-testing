@@ -20,8 +20,16 @@ use crate::{
 };
 
 /// Draws a debug image of the rectangles found using the contour algorithm.
-pub fn draw_contour_rects_debug_image_mut(canvas: &mut RgbImage, contour_rects: &[Rect]) {
+pub fn draw_candidate_timing_marks_debug_image_mut(
+    canvas: &mut RgbImage,
+    contour_rects: &[Rect],
+    candidate_timing_marks: &[Rect],
+) {
     for (i, rect) in contour_rects.iter().enumerate() {
+        draw_hollow_rect_mut(canvas, (*rect).into(), RAINBOW[i % RAINBOW.len()]);
+    }
+
+    for (i, rect) in candidate_timing_marks.iter().enumerate() {
         draw_filled_rect_mut(canvas, (*rect).into(), RAINBOW[i % RAINBOW.len()]);
     }
 }

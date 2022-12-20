@@ -74,6 +74,10 @@ impl Rect {
     pub const fn bottom(&self) -> i32 {
         self.top + self.height as i32 - 1
     }
+
+    pub const fn offset(&self, dx: i32, dy: i32) -> Self {
+        Self::new(self.left + dx, self.top + dy, self.width, self.height)
+    }
 }
 
 impl From<Rect> for imageproc::rect::Rect {
