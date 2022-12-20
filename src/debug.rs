@@ -291,7 +291,7 @@ pub fn draw_scored_oval_marks_debug_image_mut(
                     .expected_bounds
                     .left()
                     .min(scored_oval_mark.matched_bounds.left())
-                    - option_text_width as i32
+                    - option_text_width
                     - 5,
                 (scored_oval_mark
                     .expected_bounds
@@ -300,9 +300,9 @@ pub fn draw_scored_oval_marks_debug_image_mut(
                     + scored_oval_mark
                         .expected_bounds
                         .bottom()
-                        .max(scored_oval_mark.matched_bounds.bottom())) as i32
+                        .max(scored_oval_mark.matched_bounds.bottom()))
                     / 2
-                    - (option_text_height as i32 / 2),
+                    - (option_text_height / 2),
                 scale,
                 font,
                 option_color,
@@ -319,13 +319,13 @@ pub fn draw_scored_oval_marks_debug_image_mut(
                     + scored_oval_mark
                         .expected_bounds
                         .right()
-                        .max(scored_oval_mark.matched_bounds.right())) as i32
+                        .max(scored_oval_mark.matched_bounds.right()))
                     / 2
-                    - (score_text_width as i32 / 2),
+                    - (score_text_width / 2),
                 scored_oval_mark
                     .expected_bounds
                     .bottom()
-                    .max(scored_oval_mark.matched_bounds.bottom()) as i32
+                    .max(scored_oval_mark.matched_bounds.bottom())
                     + 5,
                 scale,
                 font,
@@ -347,6 +347,7 @@ pub fn draw_scored_oval_marks_debug_image_mut(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_text_with_background_mut(
     canvas: &mut RgbImage,
     text: &str,
@@ -358,8 +359,6 @@ fn draw_text_with_background_mut(
     background_color: Rgb<u8>,
 ) {
     let (text_width, text_height) = text_size(scale, font, text);
-    let text_width = text_width as i32;
-    let text_height = text_height as i32;
 
     draw_filled_rect_mut(
         canvas,

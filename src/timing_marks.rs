@@ -784,7 +784,7 @@ pub fn score_oval_mark(
         }
 
         for offset_y in -(maximum_search_distance as i32)..(maximum_search_distance as i32) {
-            let y = top as i32 + offset_y as i32;
+            let y = top as i32 + offset_y;
             if y < 0 {
                 continue;
             }
