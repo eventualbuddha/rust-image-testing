@@ -49,7 +49,7 @@ fn try_main() -> Result<(), Box<Error>> {
         Ok(json) => json,
         Err(e) => {
             return Err(Box::new(Error::InvalidElectionDefinition {
-                message: format!("Error reading election definition: {}", e),
+                message: format!("Error reading election definition: {e}"),
             }));
         }
     };
@@ -59,7 +59,7 @@ fn try_main() -> Result<(), Box<Error>> {
         Ok(election_definition) => election_definition,
         Err(e) => {
             return Err(Box::new(Error::InvalidElectionDefinition {
-                message: format!("Error parsing election definition: {}", e),
+                message: format!("Error parsing election definition: {e}"),
             }));
         }
     };
@@ -92,12 +92,12 @@ fn try_main() -> Result<(), Box<Error>> {
         Ok(json) => json,
         Err(error) => {
             return Err(Box::new(Error::SerializationFailure {
-                message: format!("Error serializing ballot card: {}", error),
+                message: format!("Error serializing ballot card: {error}"),
             }));
         }
     };
 
-    println!("{}", card_json);
+    println!("{card_json}");
     Ok(())
 }
 

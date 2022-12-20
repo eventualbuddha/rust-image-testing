@@ -148,12 +148,12 @@ pub fn intersection_of_lines(
     let p2 = segment1.end;
     let p3 = segment2.start;
     let p4 = segment2.end;
-    let d = (p4.y - p3.y) * (p2.x - p1.x) - (p4.x - p3.x) * (p2.y - p1.y);
+    let d = (p4.y - p3.y).mul_add(p2.x - p1.x, -(p4.x - p3.x) * (p2.y - p1.y));
     if d == 0.0 {
         return None;
     }
-    let u_a = ((p4.x - p3.x) * (p1.y - p3.y) - (p4.y - p3.y) * (p1.x - p3.x)) / d;
-    let u_b = ((p2.x - p1.x) * (p1.y - p3.y) - (p2.y - p1.y) * (p1.x - p3.x)) / d;
+    let u_a = (p4.x - p3.x).mul_add(p1.y - p3.y, -(p4.y - p3.y) * (p1.x - p3.x)) / d;
+    let u_b = (p2.x - p1.x).mul_add(p1.y - p3.y, -(p2.y - p1.y) * (p1.x - p3.x)) / d;
     if !bounded || ((0.0..=1.0).contains(&u_a) && (0.0..=1.0).contains(&u_b)) {
         return Some(Point::new(
             u_a.mul_add(p2.x - p1.x, p1.x),

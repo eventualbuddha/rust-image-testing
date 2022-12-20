@@ -58,7 +58,7 @@ impl<'de> Deserialize<'de> for BallotSide {
         let s = String::deserialize(deserializer)?;
         s.as_str()
             .try_into()
-            .map_err(|_| serde::de::Error::custom(format!("invalid value for BallotSide: {}", s)))
+            .map_err(|_| serde::de::Error::custom(format!("invalid value for BallotSide: {s}")))
     }
 }
 

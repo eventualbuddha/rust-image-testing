@@ -58,10 +58,10 @@ pub enum GridPosition {
 impl Display for GridPosition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Option { option_id, .. } => write!(f, "{}", option_id),
+            Self::Option { option_id, .. } => write!(f, "{option_id}"),
 
             Self::WriteIn { write_in_index, .. } => {
-                write!(f, "Write-In {}", write_in_index)
+                write!(f, "Write-In {write_in_index}")
             }
         }
     }
