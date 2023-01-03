@@ -10,6 +10,8 @@ use imageproc::{
     contrast::otsu_level,
 };
 use logging_timer::time;
+use rayon::iter::ParallelIterator;
+use rayon::prelude::IntoParallelRefIterator;
 use serde::Serialize;
 
 use crate::{
@@ -723,18 +725,17 @@ pub fn score_oval_marks_from_grid_layout(
     debug: &ImageDebugWriter,
 ) -> ScoredOvalMarks {
     let threshold = otsu_level(img);
-    let mut scored_ovals = vec![];
 
-    for grid_position in &grid_layout.grid_positions {
+    let scored_ovals = &grid_layout.grid_positions.par_iter().flat_map(|grid_position| {
         let location = grid_position.location();
 
         if location.side != side {
-            continue;
+            return vec![];
         }
 
         match timing_mark_grid.point_for_location(location.column, location.row) {
             Some(expected_oval_center) => {
-                scored_ovals.push((
+                vec![(
                     grid_position.clone(),
                     score_oval_mark(
                         img,
@@ -744,17 +745,17 @@ pub fn score_oval_marks_from_grid_layout(
                         DEFAULT_MAXIMUM_SEARCH_DISTANCE,
                         threshold,
                     ),
-                ));
+                )]
             }
-            None => scored_ovals.push((grid_position.clone(), None)),
+            None => vec![(grid_position.clone(), None)],
         }
-    }
+    }).collect::<ScoredOvalMarks>();
 
     debug.write("scored_oval_marks", |canvas| {
-        debug::draw_scored_oval_marks_debug_image_mut(canvas, &scored_ovals);
+        debug::draw_scored_oval_marks_debug_image_mut(canvas, scored_ovals);
     });
 
-    scored_ovals
+    scored_ovals.to_vec()
 }
 
 /// Scores an oval mark within a scanned ballot image.
