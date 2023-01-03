@@ -26,7 +26,7 @@ mod types;
 enum Error {
     InvalidElectionDefinition { message: String },
     OvalTemplateReadFailure { message: String },
-    InterpretFailure(crate::interpret::Error),
+    InterpretFailure(Box<crate::interpret::Error>),
     SerializationFailure { message: String },
 }
 
@@ -83,7 +83,7 @@ fn try_main() -> Result<(), Box<Error>> {
         match interpret_ballot_card(Path::new(&side_a_path), Path::new(&side_b_path), &options) {
             Ok(card) => card,
             Err(error) => {
-                return Err(Box::new(Error::InterpretFailure(error)));
+                return Err(Box::new(Error::InterpretFailure(Box::new(error))));
             }
         };
 
